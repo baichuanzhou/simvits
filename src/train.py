@@ -1,21 +1,18 @@
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from models import VisionTransformer
 import torch.nn.functional as F
-from einops.layers.torch import Rearrange
 
 from torchvision.datasets import CIFAR10
 from torch.utils.data import DataLoader
 import torchvision.transforms as T
-from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import sampler
 import warmup_scheduler
 
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 
-from data import CutMix, MixUp
+from src.vision_transformers.data import CutMix, MixUp
 
 
 class ViT(pl.LightningModule):

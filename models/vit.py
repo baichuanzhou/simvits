@@ -16,6 +16,9 @@ import torch.nn.functional as F
 from collections import OrderedDict
 from typing import Union, Tuple
 from einops.layers.torch import Rearrange
+from torch.autograd import Variable
+
+__all__ = ['VisionTransformer']
 
 
 def make_pair(t):
@@ -36,14 +39,14 @@ class Attention(nn.Module):
     def forward(self, x: torch.Tensor):
         qkv = self.qkv_proj(x).chunk(3, dim=-1)     # q, k, v is of shape B x N x (HD) (H refers to number of heads)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.n_head), qkv)    # B x H x N x D
-        H = q.size(0)
-        scores = torch.matmul(q, k.transpose(2, 3)) * (H ** -0.5)   # B x H x N x N
+        scale = q.size(-1)
+        scores = torch.matmul(q, k.transpose(-1, -2)) * (scale ** -0.5)   # B x H x N x N
 
         attn = F.softmax(scores, dim=-1)
         attn = F.dropout(attn, self.dropout)
 
         out = torch.matmul(attn, v)     # B x H x N x D
-        out = rearrange(out, 'b h n d -> b n (h d)', h=self.n_head)
+        out = rearrange(out, 'b h n d -> b n (h d)', h=self.n_head)     # B x N x (HD)
         out = F.dropout(self.c_proj(out), self.dropout)
         return out
 
@@ -108,13 +111,13 @@ class Transformer(nn.Module):
 
 
 class StandardPatchProjection(nn.Module):
-    def __init__(self, patch_height: int, patch_width: int, d_model: int):
+    def __init__(self, patch_height: int, patch_width: int, d_model: int, out_dim: int):
         super().__init__()
         self.patch_proj = nn.Sequential(
             Rearrange('b c (h ph) (w pw) -> b (h w) (ph pw c)',
                       ph=patch_height, pw=patch_width),
             nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model)
+            nn.Linear(d_model, out_dim)
         )
 
     def forward(self, x):
@@ -133,23 +136,6 @@ class ConvPatchProjection(nn.Module):
         return x
 
 
-class PositionalEmbedding(nn.Module):
-    def __init__(self, d_model: int, dropout: float, max_len: int = 1000):
-        super().__init__()
-        den = torch.exp(- torch.arange(0, d_model, 2) * math.log(1000) / d_model)
-        pos = torch.arange(0, max_len).reshape(max_len, 1)
-        pos_embedding = torch.zeros((max_len, d_model))
-        pos_embedding[:, 0::2] = torch.sin(pos * den)
-        pos_embedding[:, 1::2] = torch.cos(pos * den)
-        pos_embedding = pos_embedding.unsqueeze(0)
-
-        self.pos_embedding = nn.Parameter(pos_embedding)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        return self.dropout(x + self.pos_embedding[:, :x.size(1), :])
-
-
 def cos_position_embedding(d_model: int, max_len: int = 1000):
     den = torch.exp(- torch.arange(0, d_model, 2) * math.log(1000) / d_model)
     pos = torch.arange(0, max_len).reshape(max_len, 1)
@@ -166,7 +152,7 @@ class VisionTransformer(nn.Module):
     pos_embed_choice = ['random', 'cos']
 
     def __init__(self, image_size: Union[int, Tuple], patch_size: Union[int, Tuple], in_channels: int,
-                 n_head: int, ffn_dim: int, depth: int, dropout: float, num_classes: int,
+                 embed_dim: Union[int, None], n_head: int, ffn_dim: int, depth: int, dropout: float, num_classes: int,
                  pool: str = 'cls', pos_embed: str = 'cos', patch_proj: str = 'standard'):
         super().__init__()
         self.image_height, self.image_width = make_pair(image_size)
@@ -174,6 +160,11 @@ class VisionTransformer(nn.Module):
         self.n_head = n_head
 
         d_model = self.patch_height * self.patch_width * in_channels
+        num_patches = self.image_height // self.patch_height * self.image_width // self.patch_width
+        if embed_dim is None:
+            embed_dim = d_model
+
+        print(f"d_model: {d_model}")
         assert self.image_height % self.patch_height == 0, \
             f"Image height {self.image_height} is not divisible by patch height {self.patch_height} "
 
@@ -185,33 +176,34 @@ class VisionTransformer(nn.Module):
         assert pool in self.pool_choice, f"pool must be in {self.pool_choice}"
         self.pool = pool
 
-        scale = d_model ** -0.5
-        self.cls = nn.Parameter(scale * torch.randn(d_model))
+        scale = embed_dim ** -0.5
+        self.cls = nn.Parameter(scale * torch.randn(embed_dim))
 
         if patch_proj == 'standard':    # Patchify the images like the original ViT paper.
-            self.patch_proj = StandardPatchProjection(self.patch_height, self.patch_width, d_model)
+            self.patch_proj = StandardPatchProjection(self.patch_height, self.patch_width, d_model, embed_dim)
         else:   # Patchify the images by convolution augmentation.
-            self.patch_proj = ConvPatchProjection(patch_size, d_model, in_channels)
+            self.patch_proj = ConvPatchProjection(patch_size, embed_dim, in_channels)
 
         if pos_embed == 'random':
-            self.pos_embed = nn.Parameter(scale * torch.randn(self.patch_height * self.patch_width + 1, d_model))
+            self.pos_embed = nn.Parameter(scale * torch.randn(num_patches + 1, embed_dim))
         else:
-            self.pos_embed = nn.Parameter(cos_position_embedding(d_model))
-        self.ln_pre = nn.LayerNorm(d_model)
+            self.pos_embed = nn.Parameter(cos_position_embedding(embed_dim))
+        self.ln_pre = nn.LayerNorm(embed_dim)
 
-        self.transformer = Transformer(d_model=d_model, n_head=n_head, ffn_dim=ffn_dim, dropout=dropout, depth=depth)
-        self.ln_post = nn.LayerNorm(d_model)
+        self.transformer = Transformer(d_model=embed_dim, n_head=n_head, ffn_dim=ffn_dim, dropout=dropout, depth=depth)
+        self.ln_post = nn.LayerNorm(embed_dim)
 
-        self.mlp_head = FeedForward(dim=d_model, hidden_dim=ffn_dim, out_dim=num_classes)
+        self.mlp_head = FeedForward(dim=embed_dim, hidden_dim=ffn_dim, out_dim=num_classes)
 
     def forward(self, x):
         x = self.patch_proj(x)  # B x N x D
         x = torch.cat([self.cls + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x],
                       dim=-2)    # B x (N + 1) x D
-        x = x + self.pos_embed[:x.size(1), :]
+        x = x + Variable(self.pos_embed[:x.size(1), :], requires_grad=False)
         x = self.ln_pre(x)
 
         x = self.transformer(x)
+        x = self.ln_post(x)
 
         x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
         return self.mlp_head(x)

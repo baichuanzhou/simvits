@@ -126,9 +126,14 @@ class Trainer:
             if optim_args.get("momentum") is not None:
                 optim_kwargs.update({"momentum": optim_args["momentum"]})
 
-        elif args.optim in (OptimizerNames.ADAM, OptimizerNames.ADAMW):
+        elif args.optim == OptimizerNames.ADAM:
             from torch.optim.adam import Adam
             optim_cls = Adam
+            optim_kwargs.update(adam_kwargs)
+
+        elif args.optim == OptimizerNames.ADAMW:
+            from torch.optim.adamw import AdamW
+            optim_cls = AdamW
             optim_kwargs.update(adam_kwargs)
 
         elif args.optim == OptimizerNames.ADAGRAD:
@@ -183,7 +188,7 @@ class Trainer:
                 )
 
         if resume_from_checkpoint and last_checkpoint is not None and os.path.isfile(
-            os.path.join(last_checkpoint, TRAINER_STATE_NAME)
+                os.path.join(last_checkpoint, TRAINER_STATE_NAME)
         ):
             self.state = TrainerState.load_from_json(os.path.join(last_checkpoint, TRAINER_STATE_NAME))
             steps_trained_in_current_epoch = self.state.global_step % num_steps_per_epoch
@@ -209,10 +214,10 @@ class Trainer:
             self.state.global_step += 1
             if self.state.global_step % self.args.logging_steps == 0:
                 logger.info(f"Loss: {loss: .2f}, Epoch: {epoch + step / len(loader): .2f}, "
-                            f"Steps: {self.state.global_step}")
+                            f"Steps: {self.state.global_step}, LR: {self.optimizer.param_groups[0]['lr']: .6f}")
                 if self.state.global_step >= num_train_steps:
                     return
-        self.lr_scheduler.step()
+            self.lr_scheduler.step()
 
     def training_step(self, sample: Tuple[torch.Tensor, torch.Tensor]):
         """

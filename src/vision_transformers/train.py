@@ -12,7 +12,7 @@ import warmup_scheduler
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 
-from src.vision_transformers.data import CutMix, MixUp
+from data import CutMix, MixUp
 
 
 class ViT(pl.LightningModule):

@@ -2,6 +2,7 @@ import os
 import re
 from enum import Enum
 import torch
+import torch.nn as nn
 import random
 import numpy as np
 
@@ -54,7 +55,7 @@ class OptimizerNames(ExplicitEnum):
     ADAM = "adam"
     ADAMW = "adamw"
     SGD = "sgd"
-    ADAGRAD = "adagrad"
+    ADAGRAD = "adagrad",
 
 
 class SchedulerType(ExplicitEnum):
@@ -64,3 +65,27 @@ class SchedulerType(ExplicitEnum):
     POLYNOMIAL = "polynomial"
     CONSTANT = "constant"
     CONSTANT_WITH_WARMUP = "constant_with_warmup"
+
+
+def get_parameter_names(model, skip_module):
+    results = []
+    for name, child in model.named_children():
+        results += [
+            f"{name}.{n}"
+            for n in get_parameter_names(child, skip_module)
+            if not isinstance(child, skip_module)
+        ]
+    results += list(model._parameters.keys())
+    return results
+
+
+def get_model_param_count(model, trainable_only=False):
+    """
+    Calculate model's total param count. If trainable_only is True then count only those requiring grads
+    """
+
+    def numel(p):
+        return p.numel()
+
+    return sum(numel(p) for p in model.parameters() if not trainable_only or p.requires_grad)
+

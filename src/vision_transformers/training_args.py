@@ -34,7 +34,7 @@ class TrainingArguments:
     warmup_steps: int = field(default=0, metadata={"help": "Number of linear warm up steps"
                                                            "Overwrite warmup_ratio"})
 
-    logging_dir: Optional[str] = field(default=None, metadata={"help": "Log dir for Tensorboard"})
+    logging_dir: Optional[str] = field(default="runs", metadata={"help": "Log dir for Tensorboard"})
     logging_steps: int = field(default=500, metadata={"help": "Log data every logging_steps"})
 
     eval_steps: int = field(default=500, metadata={"help": "Eval model every eval_steps"})
@@ -59,6 +59,8 @@ class TrainingArguments:
 
     optim_args: str = field(default=None, metadata={"help": "Possible arguments for the optimizer"})
     optim: Union[str, OptimizerNames] = field(default="adamw", metadata={"help": "Set optimizer"})
+
+    log_tensorboard: bool = field(default=True, metadata={"help": "Log stats to tensorboard"})
 
     @property
     def n_gpu(self):

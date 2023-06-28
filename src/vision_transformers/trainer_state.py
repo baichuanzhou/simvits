@@ -9,7 +9,7 @@ class TrainerState:
     epoch: float = 0.0
     global_step: int = 0
     max_steps: int = 0
-    num_train_epochs: int = 0
+    num_train_epochs: float = 0.0
     best_model_checkpoint: Optional[str] = None
 
     def save_to_json(self, json_path: str):

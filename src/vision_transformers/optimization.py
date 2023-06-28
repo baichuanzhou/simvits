@@ -278,6 +278,7 @@ def get_scheduler(
             optional), the function will raise an error if it's unset and the scheduler type requires it.
     """
     name = SchedulerType(name)
+    print(name)
     schedule_func = TYPE_TO_SCHEDULER_FUNCTION[name]
     if name == SchedulerType.CONSTANT:
         return schedule_func(optimizer)

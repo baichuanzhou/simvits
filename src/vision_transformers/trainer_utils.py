@@ -97,7 +97,4 @@ def get_model_param_count(model, trainable_only=False):
     Calculate model's total param count. If trainable_only is True then count only those requiring grads
     """
 
-    def numel(p):
-        return p.numel()
-
-    return sum(numel(p) for p in model.parameters() if not trainable_only or p.requires_grad)
+    return sum(p.numel() for p in model.parameters() if not trainable_only or p.requires_grad)

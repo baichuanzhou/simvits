@@ -20,7 +20,9 @@ if __name__ == '__main__':
         depth=6,
         n_head=12,
         dropout=0.1,
-        embed_dim=384
+        embed_dim=384,
+        pool="mean",
+        patch_proj="conv"
     )
     NUM_TRAIN = 45000
     NUM = 50000
@@ -63,7 +65,7 @@ if __name__ == '__main__':
     )
 
     training_args = TrainingArguments(
-        output_dir="output",
+        output_dir="output/3",
         do_train=True,
         do_eval=True,
         do_predict=True,

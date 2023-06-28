@@ -83,8 +83,9 @@ class Trainer:
             raise RuntimeError("In order to do test prediction, a test_loader must be specified")
         self.test_loader = test_loader
         if self.args.log_tensorboard:
+            num_logs = len(os.listdir(self.args.logging_dir))
             self.tensorboard_writer = SummaryWriter(
-                log_dir=os.path.join(self.args.logging_dir, self.model._get_name())
+                log_dir=os.path.join(self.args.logging_dir, self.model._get_name() + f"_{num_logs}")
             )
 
     def create_optimizer_and_scheduler(self, num_training_steps: int):
@@ -195,7 +196,6 @@ class Trainer:
         print(f"max_steps: {max_steps}, end_epoch: {end_epoch}, num_steps_per_epoch: {num_steps_per_epoch}")
         self.create_optimizer_and_scheduler(max_steps)
 
-        logger.info("***** Running training *****")
         logger.info(f"  Number of trainable parameters = {get_model_param_count(self.model, trainable_only=True):,}")
 
         if os.path.isdir(self.args.output_dir) and self.args.do_train \
@@ -212,6 +212,12 @@ class Trainer:
                     "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
                 )
                 self.load_checkpoint(last_checkpoint)
+
+        if overwrite_output_dir and resume_from_checkpoint:
+            raise ValueError("overwrite_output_dir and resume_from_checkpoint cannot be set to True at the same time")
+
+        if overwrite_output_dir:
+            shutil.rmtree(self.args.output_dir)
 
         if resume_from_checkpoint:
             if os.path.isdir(self.args.output_dir):
@@ -230,10 +236,17 @@ class Trainer:
 
         start_epoch = math.ceil(self.state.num_train_epochs)
 
-        for epoch in range(start_epoch, end_epoch):
-            self.training_loop(self.train_loader, max_steps, epoch)
-            if self.state.global_step >= max_steps:
-                break
+        if self.args.do_train:
+            logger.info("***** Running training *****")
+            for epoch in range(start_epoch, end_epoch):
+                self.training_loop(self.train_loader, max_steps, epoch)
+                if self.state.global_step >= max_steps:
+                    break
+        if self.args.do_predict:
+            if self.args.do_predict:
+                logger.info("***** Running test *****")
+                self.test_loop(self.test_loader)
+
         self.tensorboard_writer.close()
 
     def training_loop(self, loader, num_train_steps: int, epoch: int):
@@ -257,9 +270,7 @@ class Trainer:
             if self.state.global_step >= num_train_steps:
                 if self.args.save_last:
                     self.save_checkpoint()
-                if self.args.do_predict:
-                    logger.info("***** Running test *****")
-                    self.test_loop(self.test_loader)
+
                 return
             self.lr_scheduler.step()
 
@@ -276,6 +287,8 @@ class Trainer:
         self.optimizer.step()
         if self.args.log_tensorboard:
             self.log("train_loss", loss.item())
+            if self.args.log_lr:
+                self.log("learning_rate", self.optimizer.param_groups[0]['lr'])
         return loss.item()
 
     def eval_loop(self, loader):
@@ -351,19 +364,20 @@ class Trainer:
         checkpoint_dir = os.path.join(self.args.output_dir, checkpoint)
         if not os.path.exists(self.args.output_dir):
             os.mkdir(self.args.output_dir)
-        if not os.path.exists(checkpoint_dir):
-            os.mkdir(checkpoint_dir)
 
-        if len(os.listdir(self.args.output_dir)) <= self.args.max_save or self.args.max_save is None:
+        if len(os.listdir(self.args.output_dir)) < self.args.max_save or self.args.max_save is None:
+            if not os.path.exists(checkpoint_dir):
+                os.mkdir(checkpoint_dir)
             self._save_checkpoint(checkpoint_dir)
 
         else:
             first_checkpoint = get_first_checkpoint(self.args.output_dir)
             shutil.rmtree(os.path.join(self.args.output_dir, first_checkpoint))
+            if not os.path.exists(checkpoint_dir):
+                os.mkdir(checkpoint_dir)
             self._save_checkpoint(checkpoint_dir)
 
     def _save_checkpoint(self, checkpoint_dir: str):
-
         state_file = os.path.join(checkpoint_dir, TRAINER_STATE_NAME)
         model_file = os.path.join(checkpoint_dir, MODEL_STATE_NAME)
         optimizer_file = os.path.join(checkpoint_dir, OPTIMIZER_STATE_NAME)

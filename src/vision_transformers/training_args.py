@@ -61,6 +61,7 @@ class TrainingArguments:
     optim: Union[str, OptimizerNames] = field(default="adamw", metadata={"help": "Set optimizer"})
 
     log_tensorboard: bool = field(default=True, metadata={"help": "Log stats to tensorboard"})
+    log_lr: bool = field(default=True, metadata={"help": "Log learning rate"})
 
     @property
     def n_gpu(self):

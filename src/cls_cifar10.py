@@ -8,7 +8,6 @@ from torchvision.datasets import CIFAR10
 from torch.utils.data import DataLoader
 import torchvision.transforms as T
 from torch.utils.data import sampler
-import warmup_scheduler
 
 if __name__ == '__main__':
     model = VisionTransformer(

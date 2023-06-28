@@ -1,6 +1,7 @@
 import math
 import torch
 import torch.nn as nn
+import shutil
 from dataclasses import dataclass, field
 from typing import Optional, Union, Tuple, Any, Callable
 from torch.utils.data import Dataset
@@ -9,7 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 import logging
 import os
 from .trainer_utils import (
-    get_last_checkpoint,
+    get_last_checkpoint, get_first_checkpoint,
     SchedulerType, OptimizerNames,
     set_seed, enable_full_determinism,
     get_parameter_names, get_model_param_count
@@ -21,6 +22,10 @@ from .optimization import get_scheduler
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 TRAINER_STATE_NAME = "trainer_state.json"
+MODEL_STATE_NAME = "model.pth"
+OPTIMIZER_STATE_NAME = "optimizer.pth"
+LR_SCHEDULER_STATE_NAME = "lr_scheduler.pth"
+TRAINING_ARGS_NAME = "training_args.bin"
 
 
 class Trainer:
@@ -178,33 +183,7 @@ class Trainer:
 
     def train(self, resume_from_checkpoint: bool = True, overwrite_output_dir: bool = False):
         num_steps_per_epoch = len(self.train_loader)
-        start_epoch = math.ceil(self.state.global_step / num_steps_per_epoch)
         steps_trained_in_current_epoch = 0
-        model = self.model
-        logger.info("***** Running training *****")
-        logger.info(f"  Number of trainable parameters = {get_model_param_count(model, trainable_only=True):,}")
-
-        last_checkpoint = None
-        if os.path.isdir(self.args.output_dir) and self.args.do_train \
-                and not overwrite_output_dir:
-            last_checkpoint = get_last_checkpoint(self.args.output_dir)
-            if last_checkpoint is None and len(os.listdir(self.args.output_dir)) > 0:
-                raise ValueError(
-                    f"Output directory ({self.args.output_dir}) already exists and is not empty. "
-                    "Use --overwrite_output_dir to overcome."
-                )
-            elif last_checkpoint is not None and resume_from_checkpoint is None:
-                logger.info(
-                    f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                    "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-                )
-
-        if resume_from_checkpoint and last_checkpoint is not None and os.path.isfile(
-                os.path.join(last_checkpoint, TRAINER_STATE_NAME)
-        ):
-            self.state = TrainerState.load_from_json(os.path.join(last_checkpoint, TRAINER_STATE_NAME))
-            steps_trained_in_current_epoch = self.state.global_step % num_steps_per_epoch
-
         if self.args.max_steps > 0:
             max_steps = self.args.max_steps
             end_epoch = self.args.max_steps // num_steps_per_epoch
@@ -215,7 +194,42 @@ class Trainer:
             end_epoch = self.args.epoch
         print(f"max_steps: {max_steps}, end_epoch: {end_epoch}, num_steps_per_epoch: {num_steps_per_epoch}")
         self.create_optimizer_and_scheduler(max_steps)
+
+        logger.info("***** Running training *****")
+        logger.info(f"  Number of trainable parameters = {get_model_param_count(self.model, trainable_only=True):,}")
+
+        if os.path.isdir(self.args.output_dir) and self.args.do_train \
+                and not overwrite_output_dir:
+            last_checkpoint = get_last_checkpoint(self.args.output_dir)
+            if last_checkpoint is None and len(os.listdir(self.args.output_dir)) > 0:
+                raise ValueError(
+                    f"Output directory ({self.args.output_dir}) already exists and is not empty. "
+                    "Use --overwrite_output_dir to overcome."
+                )
+            elif last_checkpoint is not None and resume_from_checkpoint is False:
+                logger.info(
+                    f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
+                    "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
+                )
+                self.load_checkpoint(last_checkpoint)
+
+        if resume_from_checkpoint:
+            if os.path.isdir(self.args.output_dir):
+                last_checkpoint = get_last_checkpoint(self.args.output_dir)
+                if last_checkpoint is not None:
+                    logger.info(
+                        f"Resume training from checkpoint: {last_checkpoint}"
+                    )
+                    self.load_checkpoint(last_checkpoint)
+                else:
+                    logger.info(
+                        f"No checkpoint detected in {self.args.output_dir}, will train from scratch"
+                    )
+            else:
+                raise FileNotFoundError(f"{self.args.output_dir} does not exist")
+
         start_epoch = math.ceil(self.state.num_train_epochs)
+
         for epoch in range(start_epoch, end_epoch):
             self.training_loop(self.train_loader, max_steps, epoch)
             if self.state.global_step >= max_steps:
@@ -234,10 +248,15 @@ class Trainer:
             if self.state.global_step % self.args.eval_steps == 0 and self.args.do_eval:
                 logger.info("***** Running eval *****")
                 self.eval_loop(self.eval_loader)
+
+            if self.state.global_step % self.args.save_steps == 0:
+                self.save_checkpoint()
             self.state.global_step += 1
-            self.state.epoch_trained = epoch + step / len(loader)
+            self.state.num_train_epochs = epoch + step / len(loader)
 
             if self.state.global_step >= num_train_steps:
+                if self.args.save_last:
+                    self.save_checkpoint()
                 if self.args.do_predict:
                     logger.info("***** Running test *****")
                     self.test_loop(self.test_loader)
@@ -315,8 +334,45 @@ class Trainer:
         add_stat_method = getattr(self.tensorboard_writer, "add_" + stat_type)
         add_stat_method(stat_name, stat, self.state.global_step)
 
-    def _load_checkpoint(self, checkpoint: str):
-        pass
+    def load_checkpoint(self, checkpoint: str):
+        checkpoint_dir = os.path.join(self.args.output_dir, checkpoint)
+        state_file = os.path.join(checkpoint_dir,  TRAINER_STATE_NAME)
+        model_file = os.path.join(checkpoint_dir, MODEL_STATE_NAME)
+        optimizer_file = os.path.join(checkpoint_dir, OPTIMIZER_STATE_NAME)
+        lr_scheduler_file = os.path.join(checkpoint_dir, LR_SCHEDULER_STATE_NAME)
 
-    def _save_checkpoint(self, checkpoint: str):
-        pass
+        self.state = TrainerState.load_from_json(state_file)
+        self.model.load_state_dict(torch.load(model_file))
+        self.optimizer.load_state_dict(torch.load(optimizer_file))
+        self.lr_scheduler.load_state_dict(torch.load(lr_scheduler_file))
+
+    def save_checkpoint(self):
+        checkpoint = f"checkpoint-{self.state.global_step}"
+        checkpoint_dir = os.path.join(self.args.output_dir, checkpoint)
+        if not os.path.exists(self.args.output_dir):
+            os.mkdir(self.args.output_dir)
+        if not os.path.exists(checkpoint_dir):
+            os.mkdir(checkpoint_dir)
+
+        if len(os.listdir(self.args.output_dir)) <= self.args.max_save or self.args.max_save is None:
+            self._save_checkpoint(checkpoint_dir)
+
+        else:
+            first_checkpoint = get_first_checkpoint(self.args.output_dir)
+            shutil.rmtree(os.path.join(self.args.output_dir, first_checkpoint))
+            self._save_checkpoint(checkpoint_dir)
+
+    def _save_checkpoint(self, checkpoint_dir: str):
+
+        state_file = os.path.join(checkpoint_dir, TRAINER_STATE_NAME)
+        model_file = os.path.join(checkpoint_dir, MODEL_STATE_NAME)
+        optimizer_file = os.path.join(checkpoint_dir, OPTIMIZER_STATE_NAME)
+        lr_scheduler_file = os.path.join(checkpoint_dir, LR_SCHEDULER_STATE_NAME)
+        training_args_file = os.path.join(checkpoint_dir, TRAINING_ARGS_NAME)
+
+        self.state.save_to_json(state_file)
+        torch.save(self.model.state_dict(), model_file)
+        torch.save(self.optimizer.state_dict(), optimizer_file)
+        torch.save(self.lr_scheduler.state_dict(), lr_scheduler_file)
+        torch.save(self.args, training_args_file)
+

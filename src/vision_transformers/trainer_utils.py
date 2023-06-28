@@ -10,14 +10,27 @@ import numpy as np
 def get_last_checkpoint(folder: str) -> str:
     PREFIX_CHECKPOINT_DIR = "checkpoint"
     _RE_CHECKPOINT = r"^" + PREFIX_CHECKPOINT_DIR + r"\-(\d+)$"
-
+    _re_checkpoint = re.compile(_RE_CHECKPOINT)
     files = os.listdir(folder)
     checkpoints = [
         checkpoint for checkpoint in files
-        if re.match(checkpoint, _RE_CHECKPOINT) is not None and os.path.isdir(os.path.join(folder, checkpoint))
+        if _re_checkpoint.match(checkpoint) is not None and os.path.isdir(os.path.join(folder, checkpoint))
     ]
-    max_checkpoints = max(checkpoints, key=lambda x: int(re.match(x, _RE_CHECKPOINT).groups()[0]))
-    return os.path.join(folder, max_checkpoints)
+    max_checkpoint = max(checkpoints, key=lambda x: int(_re_checkpoint.match(x).groups()[0]))
+    return max_checkpoint if max_checkpoint is not None else None
+
+
+def get_first_checkpoint(folder: str) -> str:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+    _RE_CHECKPOINT = r"^" + PREFIX_CHECKPOINT_DIR + r"\-(\d+)$"
+    _re_checkpoint = re.compile(_RE_CHECKPOINT)
+    files = os.listdir(folder)
+    checkpoints = [
+        checkpoint for checkpoint in files
+        if _re_checkpoint.match(checkpoint) is not None and os.path.isdir(os.path.join(folder, checkpoint))
+    ]
+    min_checkpoint = min(checkpoints, key=lambda x: int(_re_checkpoint.match(x).groups()[0]))
+    return min_checkpoint if min_checkpoint is not None else None
 
 
 def enable_full_determinism(seed: int):
@@ -86,5 +99,5 @@ def get_model_param_count(model, trainable_only=False):
 
     def numel(p):
         return p.numel()
-    return sum(numel(p) for p in model.parameters() if not trainable_only or p.requires_grad)
 
+    return sum(numel(p) for p in model.parameters() if not trainable_only or p.requires_grad)

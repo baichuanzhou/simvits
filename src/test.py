@@ -63,7 +63,7 @@ if __name__ == '__main__':
     )
 
     training_args = TrainingArguments(
-        output_dir="./temp_output",
+        output_dir="output",
         do_train=True,
         do_eval=True,
         do_predict=True,
@@ -84,4 +84,4 @@ if __name__ == '__main__':
         criterion=F.cross_entropy,
         compute_metric=compute_metrics
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=False, overwrite_output_dir=False)

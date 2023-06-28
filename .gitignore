@@ -1,2 +1,3 @@
 .idea
-./src/runs
+src/runs
+src/output

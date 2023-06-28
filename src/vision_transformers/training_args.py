@@ -40,9 +40,9 @@ class TrainingArguments:
     eval_steps: int = field(default=500, metadata={"help": "Eval model every eval_steps"})
     save_steps: int = field(default=500, metadata={"help": "Save model to output_dir every save_steps"})
 
-    max_save: int = field(default=None, metadata={"help": "Maximum number of save to your output_dir"
-                                                          "Delete older checkpoints like a stack"
-                                                          "Default to None"})
+    max_save: int = field(default=3, metadata={"help": "Maximum number of save to your output_dir"
+                                                       "Delete older checkpoints like a stack"
+                                                       "Default to None"})
     save_last: bool = field(default=True, metadata={"help": "Whether to save the last checkpoint"})
 
     resume_from_checkpoint: bool = field(default=False, metadata={"help": "Whether to resume from last checkpoint"})

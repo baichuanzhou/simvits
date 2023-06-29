@@ -63,6 +63,7 @@ class TrainingArguments:
     log_tensorboard: bool = field(default=True, metadata={"help": "Log stats to tensorboard"})
     log_lr: bool = field(default=True, metadata={"help": "Log learning rate"})
 
+
     @property
     def n_gpu(self):
         return torch.cuda.device_count()

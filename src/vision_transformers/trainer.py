@@ -83,15 +83,21 @@ class Trainer:
             raise RuntimeError("In order to do test prediction, a test_loader must be specified")
         self.test_loader = test_loader
         if self.args.log_tensorboard:
-            num_logs = len(os.listdir(self.args.logging_dir))
-            if not self.args.resume_from_checkpoint:
-                self.tensorboard_writer = SummaryWriter(
-                    log_dir=os.path.join(self.args.logging_dir, self.model._get_name() + f"_{num_logs}")
-                )
+            if os.path.exists(self.args.logging_dir):
+                num_logs = len(os.listdir(self.args.logging_dir))
+                if not self.args.resume_from_checkpoint:
+                    self.tensorboard_writer = SummaryWriter(
+                        log_dir=os.path.join(self.args.logging_dir, self.model._get_name() + f"_{num_logs}")
+                    )
+
+                else:
+                    # If resume from last checkpoint, log data to the last log dir
+                    self.tensorboard_writer = SummaryWriter(
+                        log_dir=os.path.join(self.args.logging_dir, self.model._get_name() + f"_{num_logs - 1}")
+                    )
             else:
-                # If resume from last checkpoint, log data to the last log dir
                 self.tensorboard_writer = SummaryWriter(
-                    log_dir=os.path.join(self.args.logging_dir, self.model._get_name() + f"_{num_logs - 1}")
+                    log_dir=os.path.join(self.args.logging_dir, self.model._get_name())
                 )
 
     def create_optimizer_and_scheduler(self, num_training_steps: int):
@@ -369,18 +375,18 @@ class Trainer:
         checkpoint = f"checkpoint-{self.state.global_step}"
         checkpoint_dir = os.path.join(self.args.output_dir, checkpoint)
         if not os.path.exists(self.args.output_dir):
-            os.mkdir(self.args.output_dir)
+            os.makedirs(self.args.output_dir)
 
         if len(os.listdir(self.args.output_dir)) < self.args.max_save or self.args.max_save is None:
             if not os.path.exists(checkpoint_dir):
-                os.mkdir(checkpoint_dir)
+                os.makedirs(checkpoint_dir)
             self._save_checkpoint(checkpoint_dir)
 
         else:
             first_checkpoint = get_first_checkpoint(self.args.output_dir)
             shutil.rmtree(os.path.join(self.args.output_dir, first_checkpoint))
             if not os.path.exists(checkpoint_dir):
-                os.mkdir(checkpoint_dir)
+                os.makedirs(checkpoint_dir)
             self._save_checkpoint(checkpoint_dir)
 
     def _save_checkpoint(self, checkpoint_dir: str):

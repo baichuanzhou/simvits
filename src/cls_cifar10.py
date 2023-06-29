@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 
 @dataclass
-class ModelArgument:
+class ModelArguments:
     num_classes: int = field(default=10, metadata={"help": "number of classes for ViT's MLP head"})
     image_size: int = field(default=32, metadata={"help": "size of input image"})
     patch_size: int = field(default=4, metadata={"help": "patch size"})
@@ -31,10 +31,25 @@ class ModelArgument:
 
 
 def main():
-    parser = HfArgumentParser((ModelArgument, TrainingArguments))
+    parser = HfArgumentParser((ModelArguments, TrainingArguments))
     model_args, training_args = parser.parse_args_into_dataclasses()
+    print(model_args)
 
-    model = VisionTransformer(**model_args)
+    model = VisionTransformer(
+        num_classes=model_args.num_classes,
+        embed_dim=model_args.embed_dim,
+        image_size=model_args.image_size,
+        patch_size=model_args.patch_size,
+        in_channels=model_args.in_channels,
+        ffn_dim=model_args.ffn_dim,
+        depth=model_args.depth,
+        n_head=model_args.n_head,
+        dropout=model_args.dropout,
+        pool=model_args.pool,
+        patch_proj=model_args.patch_proj,
+        pos_embed=model_args.pos_embed,
+        fixed_patch_proj=model_args.fixed_patch_proj
+    )
     NUM_TRAIN = 45000
     NUM = 50000
 
@@ -52,21 +67,21 @@ def main():
         T.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
     ])
 
-    train_dataset = CIFAR10(root='../../pytorch-cifar10/datasets', train=True,
+    train_dataset = CIFAR10(root='../../datasets/cifar-10', train=True,
                             download=False, transform=train_transform)
-    val_dataset = CIFAR10(root='../../pytorch-cifar10/datasets', train=True,
+    val_dataset = CIFAR10(root='../../datasets/cifar-10', train=True,
                           download=False, transform=train_transform)
-    test_dataset = CIFAR10(root='../../pytorch-cifar10/datasets', train=False,
+    test_dataset = CIFAR10(root='../../datasets/cifar-10', train=False,
                            download=False, transform=test_transform)
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=128,
+        batch_size=512,
         sampler=sampler.SubsetRandomSampler(range(NUM_TRAIN))
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=128,
+        batch_size=512,
         sampler=sampler.SubsetRandomSampler(range(NUM_TRAIN, NUM))
     )
     test_loader = DataLoader(
@@ -84,7 +99,8 @@ def main():
         criterion=F.cross_entropy,
         compute_metric=compute_metrics
     )
-    trainer.train(resume_from_checkpoint=True, overwrite_output_dir=False)
+    trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint,
+                  overwrite_output_dir=training_args.overwrite_output_dir)
 
 
 if __name__ == '__main__':

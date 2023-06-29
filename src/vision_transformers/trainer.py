@@ -18,6 +18,8 @@ from .trainer_utils import (
 from .training_args import TrainingArguments
 from .trainer_state import TrainerState
 from .optimization import get_scheduler
+import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -250,10 +252,11 @@ class Trainer:
 
         if self.args.do_train:
             logger.info("***** Running training *****")
-            for epoch in range(start_epoch, end_epoch):
-                self.training_loop(self.train_loader, max_steps, epoch)
-                if self.state.global_step >= max_steps:
-                    break
+            with logging_redirect_tqdm():
+                for epoch in tqdm.trange(start_epoch, end_epoch):
+                    self.training_loop(self.train_loader, max_steps, epoch)
+                    if self.state.global_step >= max_steps:
+                        break
         if self.args.do_predict:
             if self.args.do_predict:
                 logger.info("***** Running test *****")

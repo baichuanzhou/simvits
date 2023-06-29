@@ -1,4 +1,6 @@
-from vision_transformers import VisionTransformer, Trainer, TrainingArguments, compute_metrics
+from vision_transformers import (
+    VisionTransformer, Trainer, TrainingArguments, compute_metrics, HfArgumentParser
+)
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -8,21 +10,31 @@ from torchvision.datasets import CIFAR10
 from torch.utils.data import DataLoader
 import torchvision.transforms as T
 from torch.utils.data import sampler
+from dataclasses import dataclass, field
 
-if __name__ == '__main__':
-    model = VisionTransformer(
-        num_classes=10,
-        image_size=32,
-        patch_size=4,
-        in_channels=3,
-        ffn_dim=384,
-        depth=6,
-        n_head=12,
-        dropout=0.1,
-        embed_dim=384,
-        pool="mean",
-        patch_proj="conv"
-    )
+
+@dataclass
+class ModelArgument:
+    num_classes: int = field(default=10, metadata={"help": "number of classes for ViT's MLP head"})
+    image_size: int = field(default=32, metadata={"help": "size of input image"})
+    patch_size: int = field(default=4, metadata={"help": "patch size"})
+    in_channels: int = field(default=3, metadata={"help": "input image color channel"})
+    ffn_dim: int = field(default=384, metadata={"help": "MLP head hidden dim"})
+    depth: int = field(default=6, metadata={"help": "number of transformer block"})
+    n_head: int = field(default=12, metadata={"help": "number of self-attention head"})
+    dropout: float = field(default=0.1, metadata={"help": "dropout"})
+    embed_dim: int = field(default=384, metadata={"help": "embedding dim for ViT"})
+    pool: str = field(default="cls", metadata={"help": "select how to extract embedding every block"})
+    patch_proj: str = field(default="standard", metadata={"help": "how to patchify input image"})
+    pos_embed: str = field(default="cos", metadata={"help": "positional embedding"})
+    fixed_patch_proj: bool = field(default=False, metadata={"help": "whether to freeze patch projection"})
+
+
+def main():
+    parser = HfArgumentParser((ModelArgument, TrainingArguments))
+    model_args, training_args = parser.parse_args_into_dataclasses()
+
+    model = VisionTransformer(**model_args)
     NUM_TRAIN = 45000
     NUM = 50000
 
@@ -63,19 +75,6 @@ if __name__ == '__main__':
         shuffle=False
     )
 
-    training_args = TrainingArguments(
-        output_dir="output/3",
-        do_train=True,
-        do_eval=True,
-        do_predict=True,
-        optim="adamw",
-        logging_steps=100,
-        learning_rate=1e-3,
-        weight_decay=0.1,
-        lr_scheduler_type="cosine",
-        warmup_steps=3000,
-        epoch=100
-    )
     trainer = Trainer(
         model=model,
         training_args=training_args,
@@ -85,4 +84,8 @@ if __name__ == '__main__':
         criterion=F.cross_entropy,
         compute_metric=compute_metrics
     )
-    trainer.train(resume_from_checkpoint=False, overwrite_output_dir=False)
+    trainer.train(resume_from_checkpoint=True, overwrite_output_dir=False)
+
+
+if __name__ == '__main__':
+    main()

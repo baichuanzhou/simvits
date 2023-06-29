@@ -84,9 +84,15 @@ class Trainer:
         self.test_loader = test_loader
         if self.args.log_tensorboard:
             num_logs = len(os.listdir(self.args.logging_dir))
-            self.tensorboard_writer = SummaryWriter(
-                log_dir=os.path.join(self.args.logging_dir, self.model._get_name() + f"_{num_logs}")
-            )
+            if not self.args.resume_from_checkpoint:
+                self.tensorboard_writer = SummaryWriter(
+                    log_dir=os.path.join(self.args.logging_dir, self.model._get_name() + f"_{num_logs}")
+                )
+            else:
+                # If resume from last checkpoint, log data to the last log dir
+                self.tensorboard_writer = SummaryWriter(
+                    log_dir=os.path.join(self.args.logging_dir, self.model._get_name() + f"_{num_logs - 1}")
+                )
 
     def create_optimizer_and_scheduler(self, num_training_steps: int):
         """Create optimizer and scheduler.

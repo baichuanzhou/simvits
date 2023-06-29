@@ -157,7 +157,8 @@ class VisionTransformer(nn.Module):
 
     def __init__(self, image_size: Union[int, Tuple], patch_size: Union[int, Tuple], in_channels: int,
                  embed_dim: Union[int, None], n_head: int, ffn_dim: int, depth: int, dropout: float, num_classes: int,
-                 pool: str = 'cls', pos_embed: str = 'cos', patch_proj: str = 'standard'):
+                 pool: str = 'cls', pos_embed: str = 'cos',
+                 patch_proj: str = 'standard', fixed_patch_proj: bool = False):
         super().__init__()
         self.image_height, self.image_width = make_pair(image_size)
         self.patch_height, self.patch_width = make_pair(patch_size)
@@ -182,6 +183,7 @@ class VisionTransformer(nn.Module):
         scale = embed_dim ** -0.5
         self.cls = nn.Parameter(scale * torch.randn(embed_dim))
 
+        self.fixed_patch_proj = fixed_patch_proj
         if patch_proj == 'standard':    # Patchify the images like the original ViT paper.
             self.patch_proj = StandardPatchProjection(self.patch_height, self.patch_width, d_model, embed_dim)
         else:   # Patchify the images by convolution augmentation.
@@ -199,7 +201,11 @@ class VisionTransformer(nn.Module):
         self.mlp_head = FeedForward(dim=embed_dim, hidden_dim=ffn_dim, out_dim=num_classes)
 
     def forward(self, x) -> torch.Tensor:
-        x = self.patch_proj(x)  # B x N x D
+        if self.fixed_patch_proj:
+            with torch.no_grad():
+                x = self.patch_proj(x)  # B x N x D
+        else:
+            x = self.patch_proj(x)  # B x N x D
         x = torch.cat([self.cls + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x],
                       dim=-2)    # B x (N + 1) x D
         x = x + Variable(self.pos_embed[:x.size(1), :], requires_grad=False)

@@ -1,0 +1,21 @@
+python cls_imagenet100.py --num_classes 100 \
+--image_size 224 --patch_size 8 --in_channels 3 --ffn_dim 768 \
+--depth 12 --n_head 3 --dropout 0.1 \
+--embed_dim 192 --pool "cls" --patch_proj "standard" \
+--pos_embed "cos" \
+--fixed_patch_proj False \
+--output_dir "output/imagenet100/ViT-Ti/1" \
+--do_train True \
+--do_eval False \
+--do_predict False \
+--optim "adamw" \
+--logging_dir "runs/imagenet100/ViT-Ti" \
+--logging_steps 100 \
+--learning_rate 1e-3 \
+--weight_decay 0.1 \
+--lr_scheduler_type "cosine" \
+--warmup_steps 3000 \
+--epoch 100 \
+--resume_from_checkpoint False \
+--overwrite_output_dir True \
+--gradient_accumulation_steps 4

@@ -98,6 +98,7 @@ class Trainer:
                         log_dir=os.path.join(self.args.logging_dir, self.model._get_name() + f"_{num_logs - 1}")
                     )
             else:
+                os.makedirs(self.args.logging_dir)
                 self.tensorboard_writer = SummaryWriter(
                     log_dir=os.path.join(self.args.logging_dir, self.model._get_name())
                 )
@@ -197,7 +198,7 @@ class Trainer:
         return self.lr_scheduler
 
     def train(self, resume_from_checkpoint: bool = True, overwrite_output_dir: bool = False):
-        num_steps_per_epoch = len(self.train_loader)
+        num_steps_per_epoch = len(self.train_loader) // self.args.gradient_accumulation_steps
         steps_trained_in_current_epoch = 0
         if self.args.max_steps > 0:
             max_steps = self.args.max_steps
@@ -231,7 +232,8 @@ class Trainer:
             raise ValueError("overwrite_output_dir and resume_from_checkpoint cannot be set to True at the same time")
 
         if overwrite_output_dir:
-            shutil.rmtree(self.args.output_dir)
+            if os.path.exists(self.args.output_dir):
+                shutil.rmtree(self.args.output_dir)
 
         if resume_from_checkpoint:
             if os.path.isdir(self.args.output_dir):
@@ -267,44 +269,51 @@ class Trainer:
     def training_loop(self, loader, num_train_steps: int, epoch: int):
         self.model.train()
 
+        accu_loss = 0   # accumulated loss for gradient accumulation
+        self.optimizer.zero_grad()
         for step, sample in enumerate(loader):
             loss = self.training_step(sample)
-            if self.state.global_step % self.args.logging_steps == 0:
-                logger.info(f"Loss: {loss: .2f}, Epoch: {epoch + step / len(loader): .2f}, "
-                            f"Steps: {self.state.global_step}, LR: {self.optimizer.param_groups[0]['lr']: .6f}")
+            accu_loss += loss
 
-            if self.state.global_step % self.args.eval_steps == 0 and self.args.do_eval:
-                logger.info("***** Running eval *****")
-                self.eval_loop(self.eval_loader)
+            if ((step + 1) % self.args.gradient_accumulation_steps) == 0 or (step + 1 == len(loader)):
+                self.optimizer.step()
+                self.lr_scheduler.step()
+                self.optimizer.zero_grad()
 
-            if self.state.global_step % self.args.save_steps == 0:
-                self.save_checkpoint()
-            self.state.global_step += 1
-            self.state.num_train_epochs = epoch + step / len(loader)
+                if self.args.log_tensorboard:
+                    self.log("train_loss", accu_loss)
+                    if self.args.log_lr:
+                        self.log("learning_rate", self.optimizer.param_groups[0]['lr'])
 
-            if self.state.global_step >= num_train_steps:
-                if self.args.save_last:
+                if self.state.global_step % self.args.logging_steps == 0:
+                    logger.info(f"Loss: {accu_loss: .2f}, Epoch: {epoch + step / len(loader): .2f}, "
+                                f"Steps: {self.state.global_step}, LR: {self.optimizer.param_groups[0]['lr']: .6f}")
+
+                if self.state.global_step % self.args.eval_steps == 0 and self.args.do_eval:
+                    logger.info("***** Running eval *****")
+                    self.eval_loop(self.eval_loader)
+
+                if self.state.global_step % self.args.save_steps == 0:
                     self.save_checkpoint()
+                self.state.global_step += 1
+                self.state.num_train_epochs = epoch + step / len(loader)
+                accu_loss = 0
 
-                return
-            self.lr_scheduler.step()
+                if self.state.global_step >= num_train_steps:
+                    if self.args.save_last:
+                        self.save_checkpoint()
+                    return
 
     def training_step(self, sample: Tuple[torch.Tensor, torch.Tensor]):
         """Steps for training,
         If not overwritten, it treats training as a classification problem
         """
         X, y = sample
-        X, y = X.to(self.device), y.to(self.device)
+        X, y = X.to(device=self.device), y.to(device=self.device)
         output = self.model(X)
-        loss = self.compute_loss(output, y)
-        self.optimizer.zero_grad()
+        loss = self.compute_loss(output, y) / self.args.gradient_accumulation_steps
         loss.backward()
-        self.optimizer.step()
-        if self.args.log_tensorboard:
-            self.log("train_loss", loss.item())
-            if self.args.log_lr:
-                self.log("learning_rate", self.optimizer.param_groups[0]['lr'])
-        return loss.item()
+        return loss.detach().item()
 
     def eval_loop(self, loader):
         accuracy = 0
@@ -315,16 +324,18 @@ class Trainer:
             losses += loss
             accuracy += correct
 
-        self.model.train()
         eval_accuracy, eval_loss = accuracy / num, losses / num
         logger.info(f"Eval Loss: {eval_loss: .2f}, Eval Acc: {eval_accuracy * 100: .2f}%")
         if self.args.log_tensorboard:
             self.log("eval_accuracy", eval_accuracy)
             self.log("eval_loss", eval_loss)
+        self.model.train()
 
     def eval_step(self, sample: Tuple[Any, Any]):
         if (self.args.do_eval or self.args.do_predict) and self.compute_metric is None:
             raise NotImplementedError("do_eval or do_predict requires implementing compute_metric to do evaluation")
+
+        self.model.eval()
         with torch.no_grad():
             predictions, y = self.compute_metric(self.model, sample, self.device)
             loss = self.compute_loss(predictions, y)
@@ -349,7 +360,7 @@ class Trainer:
             self.log("test_accuracy", test_accuracy)
             self.log("test_loss", test_loss)
 
-    def compute_loss(self, output, y):
+    def compute_loss(self, output: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """Computes loss for training.
         If not overwritten, it takes prediction and ground truth and use `self.criterion` to compute loss
         """

@@ -77,7 +77,7 @@ def main():
 
     train_loader = DataLoader(
         dataset=train_dataset,
-        batch_size=64,
+        batch_size=128,
         sampler=sampler.SubsetRandomSampler(train_indices)
     )
     val_loader = DataLoader(

@@ -63,6 +63,7 @@ class TrainingArguments:
     log_tensorboard: bool = field(default=True, metadata={"help": "Log stats to tensorboard"})
     log_lr: bool = field(default=True, metadata={"help": "Log learning rate"})
 
+    gradient_accumulation_steps: int = field(default=1, metadata={"help": "Number of backprop step before updating"})
 
     @property
     def n_gpu(self):

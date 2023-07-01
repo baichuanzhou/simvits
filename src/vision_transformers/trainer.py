@@ -272,8 +272,13 @@ class Trainer:
         accu_loss = 0   # accumulated loss for gradient accumulation
         self.optimizer.zero_grad()
         for step, sample in enumerate(loader):
-            loss = self.training_step(sample)
-            accu_loss += loss
+            # loss = self.training_step(sample)
+            X, y = sample
+            X, y = X.to(device=self.device), y.to(device=self.device)
+            output = self.model(X)
+            loss = self.compute_loss(output, y) / self.args.gradient_accumulation_steps
+            loss.backward()
+            accu_loss += loss.detach().item()
 
             if ((step + 1) % self.args.gradient_accumulation_steps) == 0 or (step + 1 == len(loader)):
                 self.optimizer.step()

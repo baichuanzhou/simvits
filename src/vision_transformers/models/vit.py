@@ -104,7 +104,9 @@ class Transformer(nn.Module):
     def __init__(self, d_model: int, n_head: int, ffn_dim: int, depth: int, dropout: float):
         super().__init__()
         self.depth = depth
-        self.blocks = nn.Sequential(*[ResidualAttentionBlock(d_model, n_head, ffn_dim, dropout) for _ in range(depth)])
+        self.blocks = nn.Sequential(
+            *[nn.TransformerEncoderLayer(d_model, n_head, ffn_dim, dropout) for _ in range(depth)]
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.blocks(x)

@@ -7,6 +7,7 @@ from typing import Optional, Union, Tuple, Any, Callable
 from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torch.cuda.amp import autocast, GradScaler
 import logging
 import os
 from .trainer_utils import (
@@ -84,6 +85,8 @@ class Trainer:
         if self.args.do_predict and test_loader is None:
             raise RuntimeError("In order to do test prediction, a test_loader must be specified")
         self.test_loader = test_loader
+        self.scaler = GradScaler()  # Set up GradScaler for mixed precision
+
         if self.args.log_tensorboard:
             if os.path.exists(self.args.logging_dir):
                 num_logs = len(os.listdir(self.args.logging_dir))
@@ -269,19 +272,15 @@ class Trainer:
     def training_loop(self, loader, num_train_steps: int, epoch: int):
         self.model.train()
 
-        accu_loss = 0   # accumulated loss for gradient accumulation
-        self.optimizer.zero_grad()
+        accu_loss = 0  # accumulated loss for gradient accumulation
         for step, sample in enumerate(loader):
-            # loss = self.training_step(sample)
-            X, y = sample
-            X, y = X.to(device=self.device), y.to(device=self.device)
-            output = self.model(X)
-            loss = self.compute_loss(output, y) / self.args.gradient_accumulation_steps
-            loss.backward()
-            accu_loss += loss.detach().item()
+            loss = self.training_step(sample)
+
+            accu_loss += loss.item()
 
             if ((step + 1) % self.args.gradient_accumulation_steps) == 0 or (step + 1 == len(loader)):
-                self.optimizer.step()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
                 self.lr_scheduler.step()
                 self.optimizer.zero_grad()
 
@@ -315,10 +314,14 @@ class Trainer:
         """
         X, y = sample
         X, y = X.to(device=self.device), y.to(device=self.device)
-        output = self.model(X)
-        loss = self.compute_loss(output, y) / self.args.gradient_accumulation_steps
-        loss.backward()
-        return loss.detach().item()
+
+        with autocast():  # using autocast for automatic mixed precision
+            output = self.model(X)
+            loss = self.compute_loss(output, y) / self.args.gradient_accumulation_steps
+
+        self.scaler.scale(loss).backward()  # scale the loss before backward()
+
+        return loss.detach()  # return Tensor, not item
 
     def eval_loop(self, loader):
         accuracy = 0

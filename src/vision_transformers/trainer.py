@@ -424,3 +424,11 @@ class Trainer:
         torch.save(self.lr_scheduler.state_dict(), lr_scheduler_file)
         torch.save(self.args, training_args_file)
 
+
+class ClassificationTrainer(Trainer):
+
+    @classmethod
+    def accuracy(cls, y_hat: torch.Tensor, y: torch.Tensor, averaged: bool = True) -> float:
+        _, prediction_index = y_hat.max(dim=1)
+        num_correct = (prediction_index == y).sum().data
+        return num_correct / y_hat.size(0) if averaged else num_correct

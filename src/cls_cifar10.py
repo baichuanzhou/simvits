@@ -57,7 +57,6 @@ def main():
     train_transform = T.Compose([
         T.RandomCrop(32, padding=4),
         T.RandomHorizontalFlip(),
-        RandomCropPaste(32),
         T.ToTensor(),
         T.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
     ]

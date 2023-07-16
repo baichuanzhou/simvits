@@ -25,6 +25,53 @@ def make_pair(t):
     return t if isinstance(t, tuple) else (t, t)
 
 
+class SelfAttention(nn.Module):
+    def __init__(self,
+                 d_model: int, n_head: int, output_dim: int = None,
+                 attn_dropout: float = 0.1, qkv_bias: bool = True):
+        super().__init__()
+        self.q_proj = nn.Linear(d_model, d_model, bias=qkv_bias)
+        self.k_proj = nn.Linear(d_model, d_model, bias=qkv_bias)
+        self.v_proj = nn.Linear(d_model, d_model, bias=qkv_bias)
+
+        self.c_proj = nn.Linear(d_model, output_dim)
+
+        self.n_head = n_head
+        self.d_model = d_model
+        self.attn_dropout = attn_dropout
+        assert d_model % n_head == 0, f"n_head: {n_head}, must be divisible by d_model: {d_model}"
+
+    def _self_attn_init(self):
+        pass
+
+    def attn_transpose(self, x):
+        transpose_size = x.size()[:-1] + (self.n_head, self.d_model // self.n_head)
+        x = x.reshape(transpose_size).permute(0, 2, 1, 3)
+        return x
+
+    def forward(self, x):
+        q = self.q_proj(x)      # q: B x N x (H x D)
+        original_size = q.size()
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+
+        scale = q.size(1)
+
+        q = self.attn_transpose(q)      # q: B x H x N x D
+        k = self.attn_transpose(k)      # k: B x H x N x D
+        v = self.attn_transpose(v)      # v: B x H x N x D
+
+        attn_score = torch.matmul(q, k.transpose(-1, -2)) * scale ** -0.5       # B x H x N x N
+        attn_score = F.softmax(attn_score, dim=-1)
+        attn_score = F.dropout(attn_score, self.attn_dropout)       # This is weird, but it is from the original paper
+
+        v = torch.matmul(attn_score, v)
+        v = v.resize(original_size)
+        out = self.c_proj(v)
+        out = F.dropout(out, self.attn_dropout)
+        return out
+
+
 class Attention(nn.Module):
     """
     The Attention module described in the Vision Transformer paper.

@@ -25,7 +25,7 @@ def make_pair(t):
     return t if isinstance(t, tuple) else (t, t)
 
 
-class SelfAttention(nn.Module):
+class ViTSelfAttention(nn.Module):
     def __init__(self,
                  d_model: int, n_head: int, output_dim: int = None,
                  attn_dropout: float = 0.1, qkv_bias: bool = True):

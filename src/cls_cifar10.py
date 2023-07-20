@@ -57,6 +57,9 @@ def main():
     train_transform = T.Compose([
         T.RandomCrop(32, padding=4),
         T.RandomHorizontalFlip(),
+
+
+
         T.ToTensor(),
         T.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
     ]
@@ -68,11 +71,11 @@ def main():
         T.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
     ])
 
-    train_dataset = CIFAR10(root='../../datasets/cifar-10', train=True,
+    train_dataset = CIFAR10(root='../../pytorch-cifar10/datasets', train=True,
                             download=False, transform=train_transform)
-    val_dataset = CIFAR10(root='../../datasets/cifar-10', train=True,
+    val_dataset = CIFAR10(root='../../pytorch-cifar10/datasets', train=True,
                           download=False, transform=train_transform)
-    test_dataset = CIFAR10(root='../../datasets/cifar-10', train=False,
+    test_dataset = CIFAR10(root='../../pytorch-cifar10/datasets', train=False,
                            download=False, transform=test_transform)
 
     train_loader = DataLoader(

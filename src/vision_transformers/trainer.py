@@ -274,6 +274,7 @@ class Trainer:
 
         accu_loss = 0  # accumulated loss for gradient accumulation
         for step, sample in enumerate(loader):
+
             loss = self.training_step(sample)
 
             accu_loss += loss.item()
@@ -309,15 +310,12 @@ class Trainer:
                     return
 
     def training_step(self, sample: Tuple[torch.Tensor, torch.Tensor]):
-        """Steps for training,
-        If not overwritten, it treats training as a classification problem
-        """
         X, y = sample
         X, y = X.to(device=self.device), y.to(device=self.device)
-
+        self.model.train()
         with autocast():  # using autocast for automatic mixed precision
-            output = self.model(X)
-            loss = self.compute_loss(output, y) / self.args.gradient_accumulation_steps
+            # output = self.model(X)
+            loss = self.compute_loss((X, y)) / self.args.gradient_accumulation_steps
 
         self.scaler.scale(loss).backward()  # scale the loss before backward()
 
@@ -344,9 +342,11 @@ class Trainer:
             raise NotImplementedError("do_eval or do_predict requires implementing compute_metric to do evaluation")
 
         self.model.eval()
+        X, y = sample
+        X, y = X.to(device=self.device), y.to(device=self.device)
         with torch.no_grad():
-            predictions, y = self.compute_metric(self.model, sample, self.device)
-            loss = self.compute_loss(predictions, y)
+            predictions = self.model(X)
+            loss = self.compute_loss((X, y))
             _, prediction_index = predictions.max(dim=1)
             num_correct = (prediction_index == y).sum().data
             num_sample = y.size(0)
@@ -368,14 +368,16 @@ class Trainer:
             self.log("test_accuracy", test_accuracy)
             self.log("test_loss", test_loss)
 
-    def compute_loss(self, output: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def compute_loss(self, sample) -> torch.Tensor:
         """Computes loss for training.
         If not overwritten, it takes prediction and ground truth and use `self.criterion` to compute loss
         """
+        X, y = sample
         if self.criterion is None:
             raise NotImplementedError("Trainer must define a criterion for computing loss")
         else:
-            return self.criterion(output, y)
+            outputs = self.model(X)
+            return self.criterion(outputs, y)
 
     def log(self, stat_name, stat, stat_type="scalar"):
         add_stat_method = getattr(self.tensorboard_writer, "add_" + stat_type)

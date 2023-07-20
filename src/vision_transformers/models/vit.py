@@ -17,8 +17,12 @@ from collections import OrderedDict
 from typing import Union, Tuple
 from einops.layers.torch import Rearrange
 from torch.autograd import Variable
+from dataclasses import dataclass
+from functools import partial, reduce
+from operator import mul
+from typing import Optional
 
-__all__ = ['VisionTransformer']
+__all__ = ['VisionTransformer', 'ViT', 'vit_tiny', 'ViTConfig']
 
 
 def make_pair(t):
@@ -142,8 +146,8 @@ class ConvPatchProjection(nn.Module):
         return x
 
 
-def cos_position_embedding(d_model: int, max_len: int = 1000):
-    den = torch.exp(-torch.arange(0, d_model, 2) * math.log(1000) / d_model)
+def cos_position_embedding(d_model: int, max_len: float = 10000.):
+    den = torch.exp(-torch.arange(0, d_model, 2) * math.log(10000) / d_model)
     pos = torch.arange(0, max_len).reshape(max_len, 1)
     pos_embedding = torch.zeros((max_len, d_model))
     pos_embedding[:, 0::2] = torch.sin(pos * den)
@@ -220,33 +224,96 @@ class VisionTransformer(nn.Module):
         return self.mlp_head(x)
 
 
-class ViTSelfAttention(nn.Module):
-    def __init__(self,
-                 d_model: int, n_head: int, output_dim: int = None,
-                 attn_dropout: float = 0.1, out_dropout: float = None,
-                 qkv_bias: bool = True):
+@dataclass
+class ViTConfig:
+    image_size: int = 224
+    patch_size: int = 16
+    num_channels: int = 3
+    d_model: int = 768
+    n_head: int = 12
+    qkv_bias: bool = True
+    feedforward_dim: int = 2048
+    num_layers: int = 8
+    attn_dropout: float = 0.1
+    out_dropout: Optional[float] = 0.1
+    num_classes: Optional[int] = None
+    fix_patch_embedding: bool = True
+    norm_layer = partial(nn.LayerNorm, eps=1e-6)
+
+
+class ViTPatchEmbeddings(nn.Module):
+    def __init__(self, config: ViTConfig):
         super().__init__()
-        self.q_proj = nn.Linear(d_model, d_model, bias=qkv_bias)
-        self.k_proj = nn.Linear(d_model, d_model, bias=qkv_bias)
-        self.v_proj = nn.Linear(d_model, d_model, bias=qkv_bias)
+        self.image_size = make_pair(config.image_size)
+        self.patch_size = make_pair(config.patch_size)
 
-        self.c_proj = nn.Linear(d_model, output_dim or d_model)
+        self.num_channels, self.d_model = config.num_channels, config.d_model
+        self.num_patches = self.image_size[0] * self.image_size[1] // self.patch_size[0] * self.patch_size[1]
+        if self.image_size[0] % self.patch_size[0] != 0 or self.image_size[1] % self.patch_size[1] != 0:
+            raise ValueError(f"image size and patch size doesn't match: {self.image_size}, {self.patch_size}")
+        self.fix_patch_embedding = config.fix_patch_embedding
 
-        self.n_head = n_head
-        self.d_model = d_model
-        self.attn_dropout = attn_dropout
-        self.out_dropout = out_dropout if out_dropout is not None else attn_dropout
-        assert d_model % n_head == 0, f"n_head: {n_head}, must be divisible by d_model: {d_model}"
+        self.proj = nn.Conv2d(in_channels=self.num_channels, stride=self.patch_size,
+                              kernel_size=self.patch_size, out_channels=self.d_model)
+        # xavier_uniform initialization
+        val = math.sqrt(6. / float(reduce(mul, self.patch_size, 1)) + self.d_model)
+        nn.init.normal_(self.proj.weight, -val, val)
+        nn.init.zeros_(self.proj.bias)
+        if self.fix_patch_embedding:
+            self.proj.weight.requires_grad = False
+            self.proj.bias.requires_grad = False
 
-    def _self_attn_init(self):
-        pass
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.proj(x).flatten(2).transpose(1, 2)
 
-    def attn_transpose(self, x):
+
+class ViTEmbeddings(nn.Module):
+    def __init__(self, config: ViTConfig):
+        super().__init__()
+        self.cls_token = nn.Parameter(torch.randn(1, 1, config.d_model))
+        self.patch_embeddings = ViTPatchEmbeddings(config)
+        self.pos_embeddings = nn.Parameter(self.build_cos_position_embedding(config.d_model), requires_grad=False)
+
+    @classmethod
+    def build_cos_position_embedding(cls, d_model: int, max_len: int = 10000):
+        den = torch.exp(-torch.arange(0, d_model, 2) * math.log(float(max_len)) / d_model)
+        pos = torch.arange(0, max_len).reshape(max_len, 1)
+        pos_embedding = torch.zeros((max_len, d_model))
+        pos_embedding[:, 0::2] = torch.sin(pos * den)
+        pos_embedding[:, 1::2] = torch.cos(pos * den)
+        return pos_embedding
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.patch_embeddings(x)
+
+        x = torch.cat([self.cls_token +
+                       torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=-2)
+        x = x + self.pos_embeddings[:x.shape[-2], :]
+        return x
+
+
+class ViTSelfAttention(nn.Module):
+    def __init__(self, config: ViTConfig):
+        super().__init__()
+        self.q_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
+        self.k_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
+        self.v_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
+
+        self.c_proj = nn.Linear(config.d_model, config.d_model)
+
+        self.n_head = config.n_head
+        self.d_model = config.d_model
+        self.attn_dropout = config.attn_dropout
+        self.out_dropout = config.out_dropout if config.out_dropout is not None else config.attn_dropout
+        assert config.d_model % config.n_head == 0, f"n_head: {config.n_head}, must be divisible by d_model: " \
+                                                    f"{config.d_model}"
+
+    def attn_transpose(self, x: torch.Tensor) -> torch.Tensor:
         transpose_size = x.size()[:-1] + (self.n_head, self.d_model // self.n_head)
         x = x.reshape(transpose_size).permute(0, 2, 1, 3)
         return x
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         q = self.q_proj(x)      # q: B x N x (H x D)
         original_size = q.size()
         k = self.k_proj(x)
@@ -269,20 +336,108 @@ class ViTSelfAttention(nn.Module):
         return out
 
 
-class ViTEncoderBlock(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-
 class ViTFeedForward(nn.Module):
-    def __init__(self):
+    def __init__(self, config: ViTConfig):
         super().__init__()
+        feedforward_dim = config.feedforward_dim or config.d_model * 4
+        self.feedforward = nn.Sequential(
+            nn.Linear(config.d_model, config.feedforward_dim),
+            QuickGLEU(),
+            nn.Dropout(config.out_dropout, inplace=True),
+            nn.Linear(feedforward_dim, config.d_model),
+            nn.Dropout(config.out_dropout, inplace=True)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.feedforward(x)
+
+
+class ViTGenerator(nn.Module):
+    def __init__(self, config: ViTConfig):
+        super().__init__()
+        self.mlp_head = nn.Sequential(
+            nn.Linear(config.d_model, config.feedforward_dim),
+            QuickGLEU(),
+            nn.Dropout(config.out_dropout),
+            nn.Linear(config.feedforward_dim, config.num_classes)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.mlp_head(x)
+
+
+class ViTEncoderBlock(nn.Module):
+    def __init__(self, config: ViTConfig):
+        super().__init__()
+        self.ln_pre = config.norm_layer(config.d_model)
+        self.attn = ViTSelfAttention(config)
+        self.feedforward = ViTFeedForward(config)
+        self.ln_post = config.norm_layer(config.d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.attn(self.ln_pre(x))
+        x = x + self.feedforward(self.ln_post(x))
+        return x
 
 
 class ViTEncoder(nn.Module):
-    pass
+    def __init__(self, config):
+        super().__init__()
+        self.encoder = nn.Sequential(*[
+            ViTEncoderBlock(config)
+            for _ in range(config.num_layers)
+        ])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.encoder(x)
+
+
+class ViTPooler(nn.Module):
+    def __init__(self, config: ViTConfig):
+        super().__init__()
+        self.dense = nn.Linear(config.d_model, config.d_model)
+        self.activation = nn.Tanh()
+
+    def forward(self, hidden_states):
+        # We "pool" the model by simply taking the hidden state corresponding
+        # to the first token.
+        first_token_tensor = hidden_states[:, 0]
+        pooled_output = self.dense(first_token_tensor)
+        pooled_output = self.activation(pooled_output)
+        return pooled_output
 
 
 class ViT(nn.Module):
-    pass
+    def __init__(self, config: ViTConfig, add_pooling_layer: bool = True):
+        super().__init__()
+        self.config = config
+        self.embeddings = ViTEmbeddings(config)
+        self.encoder = ViTEncoder(config)
+
+        self.norm_layer = config.norm_layer(config.d_model)
+        self.pooling = ViTPooler(config) if add_pooling_layer else None
+
+        self.generator = ViTGenerator(config) if config.num_classes is not None else None
+
+        self._init_param()
+
+    def _init_param(self):
+        for name, m in self.named_modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                nn.init.zeros_(m.bias)
+        nn.init.normal_(self.embeddings.cls_token, std=1e-6)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.embeddings(x)
+        x = self.encoder(x)
+        x = self.norm_layer(x)
+        x = self.pooling(x) if self.pooling is not None else x[:, 0]
+        x = self.generator(x) if self.generator is not None else x
+        return x
+
+
+def vit_tiny():
+    tiny_config = ViTConfig(num_layers=12, d_model=192, feedforward_dim=768, n_head=3, num_classes=1000)
+    return ViT(tiny_config)
 

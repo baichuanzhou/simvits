@@ -196,9 +196,9 @@ class VisionTransformer(nn.Module):
             self.patch_proj = ConvPatchProjection(patch_size, d_model, in_channels, embed_dim)
 
         if pos_embed == 'random':
-            self.pos_embed = nn.Parameter(scale * torch.randn(num_patches + 1, embed_dim))
+            self.pos_embed = nn.Parameter(scale * torch.randn(num_patches + 1, embed_dim), requires_grad=False)
         else:
-            self.pos_embed = nn.Parameter(cos_position_embedding(embed_dim))
+            self.pos_embed = nn.Parameter(cos_position_embedding(embed_dim), requires_grad=False)
         self.ln_pre = nn.LayerNorm(embed_dim)
 
         self.transformer = Transformer(d_model=embed_dim, n_head=n_head, ffn_dim=ffn_dim, dropout=dropout, depth=depth)
@@ -252,32 +252,28 @@ class ViTPatchEmbeddings(nn.Module):
         if self.image_size[0] % self.patch_size[0] != 0 or self.image_size[1] % self.patch_size[1] != 0:
             raise ValueError(f"image size and patch size doesn't match: {self.image_size}, {self.patch_size}")
 
-        self.proj = nn.Conv2d(in_channels=self.num_channels, stride=self.patch_size,
-                              kernel_size=self.patch_size, out_channels=self.d_model)
-        # xavier_uniform initialization
-        val = math.sqrt(6. / float(reduce(mul, self.patch_size, 1)) + self.d_model)
-        nn.init.uniform_(self.proj.weight, -val, val)
-        nn.init.zeros_(self.proj.bias)
+        self.proj = nn.Sequential(
+            nn.Conv2d(in_channels=self.num_channels, stride=self.patch_size,
+                      kernel_size=self.patch_size, out_channels=self.d_model),
+            Rearrange('b d ph pw -> b (ph pw) d'),
+            nn.LayerNorm(config.d_model, eps=1e-6),
+            nn.Linear(config.d_model, config.d_model)
+        )
 
-        self.proj.weight.requires_grad = not config.fix_patch_embedding
-        self.proj.bias.requires_grad = not config.fix_patch_embedding
-
-        self.linear = nn.Linear(config.d_model, config.d_model)
-        self.ln = config.norm_layer(config.d_model)
+        self.proj[0].weight.requires_grad = not config.fix_patch_embedding
+        self.proj[0].bias.requires_grad = not config.fix_patch_embedding
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out = self.proj(x).flatten(2).transpose(1, 2)
-        out = self.linear(self.ln(out))
-        return out
+        return self.proj(x)
 
 
 class ViTEmbeddings(nn.Module):
     def __init__(self, config: ViTConfig):
         super().__init__()
-        self.cls_token = nn.Parameter(torch.randn(1, 1, config.d_model))
+        self.cls_token = nn.Parameter(torch.randn(1, 1, config.d_model) * config.d_model ** -0.5)
         self.patch_embeddings = ViTPatchEmbeddings(config)
         self.pos_embeddings = nn.Parameter(
-            self.build_cos_position_embedding(config.d_model, max_len=1000), requires_grad=False
+            self.build_cos_position_embedding(config.d_model), requires_grad=False
         )
 
     @classmethod
@@ -292,20 +288,23 @@ class ViTEmbeddings(nn.Module):
         return pos_embedding
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.patch_embeddings(x)
+        x = self.patch_embeddings(x)       # B x N x D
 
-        x = torch.cat([self.cls_token +
-                       torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=-2)
-        x = x + self.pos_embeddings[:x.shape[-2], :]
+        x = torch.cat(
+            [self.cls_token + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=-2
+        )   # B x (N + 1) x D
+        x = x + self.pos_embeddings[:x.size(1), :]      # B x (N + 1) x D
         return x
 
 
 class ViTSelfAttention(nn.Module):
     def __init__(self, config: ViTConfig):
         super().__init__()
-        self.q_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
-        self.k_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
-        self.v_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
+        # self.q_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
+        # self.k_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
+        # self.v_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
+
+        self.qkv_proj = nn.Linear(config.d_model, config.d_model * 3, bias=config.qkv_bias)
 
         self.c_proj = nn.Linear(config.d_model, config.d_model)
 
@@ -322,22 +321,25 @@ class ViTSelfAttention(nn.Module):
         return x
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        q = self.q_proj(x)      # q: B x N x (H x D)
-        original_size = q.size()
-        k = self.k_proj(x)
-        v = self.v_proj(x)
+        # q = self.q_proj(x)      # q: B x N x (H x D)
+        # original_size = q.size()
+        #
+        # k = self.k_proj(x)
+        # v = self.v_proj(x)
 
-        q = self.attn_transpose(q)      # q: B x H x N x D
-        k = self.attn_transpose(k)      # k: B x H x N x D
-        v = self.attn_transpose(v)      # v: B x H x N x D
-        scale = q.size(-1)
+        # q = self.attn_transpose(q)      # q: B x H x N x D
+        # k = self.attn_transpose(k)      # k: B x H x N x D
+        # v = self.attn_transpose(v)      # v: B x H x N x D
+        (q, k, v) = self.qkv_proj(x).chunk(3, dim=-1)
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.n_head), (q, k, v))  # B x H x N x D
+        scale = q.size(-1) ** 0.5
 
-        attn_score = torch.matmul(q, k.transpose(-1, -2)) * scale ** -0.5       # B x H x N x N
+        attn_score = torch.matmul(q, k.transpose(-1, -2)) / scale     # B x H x N x N
         attn_score = F.softmax(attn_score, dim=-1)
         attn_score = F.dropout(attn_score, self.attn_dropout)       # This is weird, but it is from the original paper
 
         v = torch.matmul(attn_score, v)
-        v = v.reshape(original_size)
+        v = rearrange(v, 'b h n d -> b n (h d)', h=self.n_head)
         out = self.c_proj(v)
         out = F.dropout(out, self.out_dropout)
         return out
@@ -350,9 +352,7 @@ class ViTFeedForward(nn.Module):
         self.feedforward = nn.Sequential(
             nn.Linear(config.d_model, config.feedforward_dim),
             QuickGLEU(),
-            nn.Dropout(config.out_dropout, inplace=True),
             nn.Linear(feedforward_dim, config.d_model),
-            nn.Dropout(config.out_dropout, inplace=True)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -366,7 +366,8 @@ class ViTGenerator(nn.Module):
             nn.Linear(config.d_model, config.feedforward_dim),
             QuickGLEU(),
             nn.Dropout(config.out_dropout, inplace=True),
-            nn.Linear(config.feedforward_dim, config.num_classes)
+            nn.Linear(config.feedforward_dim, config.num_classes),
+            nn.Dropout(config.out_dropout, inplace=True)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -376,10 +377,10 @@ class ViTGenerator(nn.Module):
 class ViTEncoderBlock(nn.Module):
     def __init__(self, config: ViTConfig):
         super().__init__()
-        self.ln_pre = config.norm_layer(config.d_model)
+        self.ln_pre = nn.LayerNorm(config.d_model, eps=1e-6)
         self.attn = ViTSelfAttention(config)
         self.mlp = ViTFeedForward(config)
-        self.ln_post = config.norm_layer(config.d_model)
+        self.ln_post = nn.LayerNorm(config.d_model, eps=1e-6)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.ln_pre(x))
@@ -388,7 +389,7 @@ class ViTEncoderBlock(nn.Module):
 
 
 class ViTEncoder(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config: ViTConfig):
         super().__init__()
         self.encoder = nn.Sequential(*[
             ViTEncoderBlock(config)
@@ -419,14 +420,15 @@ class ViT(nn.Module):
         super().__init__()
         self.config = config
         self.embeddings = ViTEmbeddings(config)
+        self.pre_norm = nn.LayerNorm(config.d_model, eps=1e-6)
         self.encoder = ViTEncoder(config)
 
-        self.norm_layer = config.norm_layer(config.d_model)
+        self.post_norm = nn.LayerNorm(config.d_model, eps=1e-6)
         self.pooling = ViTPooler(config) if add_pooling_layer else None
 
         self.generator = ViTGenerator(config) if config.num_classes is not None else None
 
-        self._init_param()
+        # self._init_param()
 
     def _init_param(self):
         for name, m in self.named_modules():
@@ -443,10 +445,10 @@ class ViT(nn.Module):
         if (image_height, image_width) != make_pair(self.config.image_size):
             raise ValueError(f"Image size does not match. Yours: {(image_height, image_width)}, "
                              f"config's: {make_pair(self.config.image_size)}")
-
         x = self.embeddings(x)
+        x = self.pre_norm(x)
         x = self.encoder(x)
-        x = self.norm_layer(x)
+        x = self.post_norm(x)
         x = self.pooling(x) if self.pooling is not None else x[:, 0]
         x = self.generator(x) if self.generator is not None else x
         return x

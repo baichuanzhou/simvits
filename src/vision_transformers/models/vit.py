@@ -256,7 +256,7 @@ class ViTPatchEmbeddings(nn.Module):
                               kernel_size=self.patch_size, out_channels=self.d_model)
         # xavier_uniform initialization
         val = math.sqrt(6. / float(reduce(mul, self.patch_size, 1)) + self.d_model)
-        nn.init.normal_(self.proj.weight, -val, val)
+        nn.init.uniform_(self.proj.weight, -val, val)
         nn.init.zeros_(self.proj.bias)
 
         self.proj.weight.requires_grad = not config.fix_patch_embedding
@@ -276,7 +276,9 @@ class ViTEmbeddings(nn.Module):
         super().__init__()
         self.cls_token = nn.Parameter(torch.randn(1, 1, config.d_model))
         self.patch_embeddings = ViTPatchEmbeddings(config)
-        self.pos_embeddings = nn.Parameter(self.build_cos_position_embedding(config.d_model), requires_grad=False)
+        self.pos_embeddings = nn.Parameter(
+            self.build_cos_position_embedding(config.d_model, max_len=1000), requires_grad=False
+        )
 
     @classmethod
     def build_cos_position_embedding(cls, d_model: int, max_len: int = 10000):
@@ -376,11 +378,7 @@ class ViTEncoderBlock(nn.Module):
         super().__init__()
         self.ln_pre = config.norm_layer(config.d_model)
         self.attn = ViTSelfAttention(config)
-        self.mlp = nn.Sequential(OrderedDict([
-            ("c_fc", nn.Linear(config.d_model, config.feedforward_dim)),
-            ("gleu", QuickGLEU()),
-            ("fc_c", nn.Linear(config.feedforward_dim, config.d_model))
-        ]))
+        self.mlp = ViTFeedForward(config)
         self.ln_post = config.norm_layer(config.d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

@@ -229,10 +229,10 @@ class ViTConfig:
     image_size: int = 224
     patch_size: int = 16
     num_channels: int = 3
-    d_model: int = 768
-    n_head: int = 12
+    hidden_size: int = 768
+    num_heads: int = 12
     qkv_bias: bool = True
-    feedforward_dim: int = 2048
+    intermediate_size: int = 2048
     num_layers: int = 8
     attn_dropout: float = 0.1
     out_dropout: Optional[float] = 0.1
@@ -247,17 +247,17 @@ class ViTPatchEmbeddings(nn.Module):
         self.image_size = make_pair(config.image_size)
         self.patch_size = make_pair(config.patch_size)
 
-        self.num_channels, self.d_model = config.num_channels, config.d_model
+        self.num_channels, self.hidden_size = config.num_channels, config.hidden_size
         self.num_patches = self.image_size[0] * self.image_size[1] // self.patch_size[0] * self.patch_size[1]
         if self.image_size[0] % self.patch_size[0] != 0 or self.image_size[1] % self.patch_size[1] != 0:
             raise ValueError(f"image size and patch size doesn't match: {self.image_size}, {self.patch_size}")
 
         self.proj = nn.Sequential(
             nn.Conv2d(in_channels=self.num_channels, stride=self.patch_size,
-                      kernel_size=self.patch_size, out_channels=self.d_model),
+                      kernel_size=self.patch_size, out_channels=self.hidden_size),
             Rearrange('b d ph pw -> b (ph pw) d'),
-            nn.LayerNorm(config.d_model, eps=1e-6),
-            nn.Linear(config.d_model, config.d_model)
+            nn.LayerNorm(config.hidden_size, eps=1e-6),
+            nn.Linear(config.hidden_size, config.hidden_size)
         )
 
         self.proj[0].weight.requires_grad = not config.fix_patch_embedding
@@ -270,10 +270,10 @@ class ViTPatchEmbeddings(nn.Module):
 class ViTEmbeddings(nn.Module):
     def __init__(self, config: ViTConfig):
         super().__init__()
-        self.cls_token = nn.Parameter(torch.randn(1, 1, config.d_model) * config.d_model ** -0.5)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, config.hidden_size) * config.hidden_size ** -0.5)
         self.patch_embeddings = ViTPatchEmbeddings(config)
         self.pos_embeddings = nn.Parameter(
-            self.build_cos_position_embedding(config.d_model), requires_grad=False
+            self.build_cos_position_embedding(config.hidden_size), requires_grad=False
         )
 
     @classmethod
@@ -304,19 +304,20 @@ class ViTSelfAttention(nn.Module):
         # self.k_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
         # self.v_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
 
-        self.qkv_proj = nn.Linear(config.d_model, config.d_model * 3, bias=config.qkv_bias)
+        self.qkv_proj = nn.Linear(config.hidden_size, config.hidden_size * 3, bias=config.qkv_bias)
 
-        self.c_proj = nn.Linear(config.d_model, config.d_model)
+        self.c_proj = nn.Linear(config.hidden_size, config.hidden_size)
 
-        self.n_head = config.n_head
-        self.d_model = config.d_model
+        self.num_heads = config.num_heads
+        self.d_model = config.hidden_size
         self.attn_dropout = config.attn_dropout
         self.out_dropout = config.out_dropout if config.out_dropout is not None else config.attn_dropout
-        assert config.d_model % config.n_head == 0, f"n_head: {config.n_head}, must be divisible by d_model: " \
-                                                    f"{config.d_model}"
+        assert config.hidden_size % config.num_heads == 0, f"num_heads: {config.num_heads}, " \
+                                                           f"must be divisible by d_model: " \
+                                                           f"{config.hidden_size}"
 
     def attn_transpose(self, x: torch.Tensor) -> torch.Tensor:
-        transpose_size = x.size()[:-1] + (self.n_head, self.d_model // self.n_head)
+        transpose_size = x.size()[:-1] + (self.num_heads, self.d_model // self.num_heads)
         x = x.reshape(transpose_size).permute(0, 2, 1, 3)
         return x
 
@@ -331,7 +332,7 @@ class ViTSelfAttention(nn.Module):
         # k = self.attn_transpose(k)      # k: B x H x N x D
         # v = self.attn_transpose(v)      # v: B x H x N x D
         (q, k, v) = self.qkv_proj(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.n_head), (q, k, v))  # B x H x N x D
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.num_heads), (q, k, v))  # B x H x N x D
         scale = q.size(-1) ** 0.5
 
         attn_score = torch.matmul(q, k.transpose(-1, -2)) / scale     # B x H x N x N
@@ -339,7 +340,7 @@ class ViTSelfAttention(nn.Module):
         attn_score = F.dropout(attn_score, self.attn_dropout)       # This is weird, but it is from the original paper
 
         v = torch.matmul(attn_score, v)
-        v = rearrange(v, 'b h n d -> b n (h d)', h=self.n_head)
+        v = rearrange(v, 'b h n d -> b n (h d)', h=self.num_heads)
         out = self.c_proj(v)
         out = F.dropout(out, self.out_dropout)
         return out
@@ -348,11 +349,11 @@ class ViTSelfAttention(nn.Module):
 class ViTFeedForward(nn.Module):
     def __init__(self, config: ViTConfig):
         super().__init__()
-        feedforward_dim = config.feedforward_dim or config.d_model * 4
+        intermediate_size = config.intermediate_size or config.hidden_size * 4
         self.feedforward = nn.Sequential(
-            nn.Linear(config.d_model, config.feedforward_dim),
+            nn.Linear(config.hidden_size, config.intermediate_size),
             QuickGLEU(),
-            nn.Linear(feedforward_dim, config.d_model),
+            nn.Linear(intermediate_size, config.hidden_size),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -363,10 +364,10 @@ class ViTGenerator(nn.Module):
     def __init__(self, config: ViTConfig):
         super().__init__()
         self.mlp_head = nn.Sequential(
-            nn.Linear(config.d_model, config.feedforward_dim),
+            nn.Linear(config.hidden_size, config.intermediate_size),
             QuickGLEU(),
             nn.Dropout(config.out_dropout, inplace=True),
-            nn.Linear(config.feedforward_dim, config.num_classes),
+            nn.Linear(config.intermediate_size, config.num_classes),
             nn.Dropout(config.out_dropout, inplace=True)
         )
 
@@ -377,10 +378,10 @@ class ViTGenerator(nn.Module):
 class ViTEncoderBlock(nn.Module):
     def __init__(self, config: ViTConfig):
         super().__init__()
-        self.ln_pre = nn.LayerNorm(config.d_model, eps=1e-6)
+        self.ln_pre = nn.LayerNorm(config.hidden_size, eps=1e-6)
         self.attn = ViTSelfAttention(config)
         self.mlp = ViTFeedForward(config)
-        self.ln_post = nn.LayerNorm(config.d_model, eps=1e-6)
+        self.ln_post = nn.LayerNorm(config.hidden_size, eps=1e-6)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.ln_pre(x))
@@ -403,7 +404,7 @@ class ViTEncoder(nn.Module):
 class ViTPooler(nn.Module):
     def __init__(self, config: ViTConfig):
         super().__init__()
-        self.dense = nn.Linear(config.d_model, config.d_model)
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.activation = nn.Tanh()
 
     def forward(self, hidden_states):
@@ -420,10 +421,10 @@ class ViT(nn.Module):
         super().__init__()
         self.config = config
         self.embeddings = ViTEmbeddings(config)
-        self.pre_norm = nn.LayerNorm(config.d_model, eps=1e-6)
+        self.pre_norm = nn.LayerNorm(config.hidden_size, eps=1e-6)
         self.encoder = ViTEncoder(config)
 
-        self.post_norm = nn.LayerNorm(config.d_model, eps=1e-6)
+        self.post_norm = nn.LayerNorm(config.hidden_size, eps=1e-6)
         self.pooling = ViTPooler(config) if add_pooling_layer else None
 
         self.generator = ViTGenerator(config) if config.num_classes is not None else None
@@ -455,6 +456,6 @@ class ViT(nn.Module):
 
 
 def vit_tiny():
-    tiny_config = ViTConfig(num_layers=12, d_model=192, feedforward_dim=768, n_head=3, num_classes=1000)
+    tiny_config = ViTConfig(num_layers=12, hidden_size=192, intermediate_size=768, num_heads=3, num_classes=1000)
     return ViT(tiny_config)
 

@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from functools import partial, reduce
 from operator import mul
 from typing import Optional
+from .layers import QuickGLEU
 
 __all__ = ['VisionTransformer', 'ViT', 'vit_tiny', 'ViTConfig']
 
@@ -53,15 +54,6 @@ class Attention(nn.Module):
         out = rearrange(out, 'b h n d -> b n (h d)', h=self.n_head)     # B x N x (HD)
         out = F.dropout(self.c_proj(out), self.dropout)
         return out
-
-
-class QuickGLEU(nn.Module):
-    """
-    This module is originated from OpenAI's CLIP repo:
-        - https://github.com/openai/CLIP/blob/main/clip/model.py
-    """
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x * torch.sigmoid(1.702 * x)
 
 
 class FeedForward(nn.Module):
@@ -238,7 +230,7 @@ class ViTConfig:
     out_dropout: Optional[float] = 0.1
     num_classes: Optional[int] = None
     fix_patch_embedding: bool = True
-    norm_layer = partial(nn.LayerNorm, eps=1e-6)
+    initializer_range: float = 0.02
 
 
 class ViTPatchEmbeddings(nn.Module):
@@ -252,19 +244,22 @@ class ViTPatchEmbeddings(nn.Module):
         if self.image_size[0] % self.patch_size[0] != 0 or self.image_size[1] % self.patch_size[1] != 0:
             raise ValueError(f"image size and patch size doesn't match: {self.image_size}, {self.patch_size}")
 
-        self.proj = nn.Sequential(
-            nn.Conv2d(in_channels=self.num_channels, stride=self.patch_size,
-                      kernel_size=self.patch_size, out_channels=self.hidden_size),
-            Rearrange('b d ph pw -> b (ph pw) d'),
-            nn.LayerNorm(config.hidden_size, eps=1e-6),
-            nn.Linear(config.hidden_size, config.hidden_size)
-        )
+        self.proj = nn.Conv2d(in_channels=self.num_channels, stride=self.patch_size,
+                              kernel_size=self.patch_size, out_channels=self.hidden_size)
+        # Rearrange('b d ph pw -> b (ph pw) d'),
+        self.norm_layer = nn.LayerNorm(config.hidden_size, eps=1e-6)
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
 
-        self.proj[0].weight.requires_grad = not config.fix_patch_embedding
-        self.proj[0].bias.requires_grad = not config.fix_patch_embedding
+        self.proj.weight.requires_grad = not config.fix_patch_embedding
+        self.proj.bias.requires_grad = not config.fix_patch_embedding
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.proj(x)
+        x = self.proj(x)
+        x = x.permute(0, 2, 3, 1).contiguous()
+        new_x_size = (x.size(0),) + (x.size(1) * x.size(2),) + (x.size(3),)
+        x = x.view(*new_x_size)
+        out = self.dense(self.norm_layer(x))
+        return out
 
 
 class ViTEmbeddings(nn.Module):
@@ -289,7 +284,6 @@ class ViTEmbeddings(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.patch_embeddings(x)       # B x N x D
-
         x = torch.cat(
             [self.cls_token + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=-2
         )   # B x (N + 1) x D
@@ -300,11 +294,11 @@ class ViTEmbeddings(nn.Module):
 class ViTSelfAttention(nn.Module):
     def __init__(self, config: ViTConfig):
         super().__init__()
-        # self.q_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
-        # self.k_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
-        # self.v_proj = nn.Linear(config.d_model, config.d_model, bias=config.qkv_bias)
+        self.q_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=config.qkv_bias)
+        self.k_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=config.qkv_bias)
+        self.v_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=config.qkv_bias)
 
-        self.qkv_proj = nn.Linear(config.hidden_size, config.hidden_size * 3, bias=config.qkv_bias)
+        # self.qkv_proj = nn.Linear(config.hidden_size, config.hidden_size * 3, bias=config.qkv_bias)
 
         self.c_proj = nn.Linear(config.hidden_size, config.hidden_size)
 
@@ -318,29 +312,31 @@ class ViTSelfAttention(nn.Module):
 
     def attn_transpose(self, x: torch.Tensor) -> torch.Tensor:
         transpose_size = x.size()[:-1] + (self.num_heads, self.d_model // self.num_heads)
-        x = x.reshape(transpose_size).permute(0, 2, 1, 3)
+        x = x.view(*transpose_size).permute(0, 2, 1, 3)
         return x
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # q = self.q_proj(x)      # q: B x N x (H x D)
-        # original_size = q.size()
-        #
-        # k = self.k_proj(x)
-        # v = self.v_proj(x)
+        q = self.q_proj(x)      # q: B x N x (H x D)
+        all_head_size = q.size(-1)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
 
-        # q = self.attn_transpose(q)      # q: B x H x N x D
-        # k = self.attn_transpose(k)      # k: B x H x N x D
-        # v = self.attn_transpose(v)      # v: B x H x N x D
-        (q, k, v) = self.qkv_proj(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.num_heads), (q, k, v))  # B x H x N x D
+        q = self.attn_transpose(q)      # q: B x H x N x D
+        k = self.attn_transpose(k)      # k: B x H x N x D
+        v = self.attn_transpose(v)      # v: B x H x N x D
+        # (q, k, v) = self.qkv_proj(x).chunk(3, dim=-1)
+        # q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.num_heads), (q, k, v))  # B x H x N x D
         scale = q.size(-1) ** 0.5
 
         attn_score = torch.matmul(q, k.transpose(-1, -2)) / scale     # B x H x N x N
         attn_score = F.softmax(attn_score, dim=-1)
         attn_score = F.dropout(attn_score, self.attn_dropout)       # This is weird, but it is from the original paper
 
-        v = torch.matmul(attn_score, v)
-        v = rearrange(v, 'b h n d -> b n (h d)', h=self.num_heads)
+        v = torch.matmul(attn_score, v)     # B x H x N x D
+        # v = rearrange(v, 'b h n d -> b n (h d)', h=self.num_heads)
+        v = v.permute(0, 2, 1, 3).contiguous()
+        new_v_size = v.size()[:-2] + (all_head_size, )
+        v = v.view(*new_v_size)
         out = self.c_proj(v)
         out = F.dropout(out, self.out_dropout)
         return out
@@ -363,7 +359,7 @@ class ViTFeedForward(nn.Module):
 class ViTGenerator(nn.Module):
     def __init__(self, config: ViTConfig):
         super().__init__()
-        self.mlp_head = nn.Sequential(
+        self.generator = nn.Sequential(
             nn.Linear(config.hidden_size, config.intermediate_size),
             QuickGLEU(),
             nn.Dropout(config.out_dropout, inplace=True),
@@ -372,10 +368,10 @@ class ViTGenerator(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.mlp_head(x)
+        return self.generator(x)
 
 
-class ViTEncoderBlock(nn.Module):
+class ViTLayer(nn.Module):
     def __init__(self, config: ViTConfig):
         super().__init__()
         self.ln_pre = nn.LayerNorm(config.hidden_size, eps=1e-6)
@@ -393,7 +389,7 @@ class ViTEncoder(nn.Module):
     def __init__(self, config: ViTConfig):
         super().__init__()
         self.encoder = nn.Sequential(*[
-            ViTEncoderBlock(config)
+            ViTLayer(config)
             for _ in range(config.num_layers)
         ])
 
@@ -428,15 +424,6 @@ class ViT(nn.Module):
         self.pooling = ViTPooler(config) if add_pooling_layer else None
 
         self.generator = ViTGenerator(config) if config.num_classes is not None else None
-
-        # self._init_param()
-
-    def _init_param(self):
-        for name, m in self.named_modules():
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                nn.init.zeros_(m.bias)
-        nn.init.normal_(self.embeddings.cls_token, std=1e-6)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size, num_channels, image_height, image_width = x.size()

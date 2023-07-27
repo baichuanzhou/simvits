@@ -206,7 +206,6 @@ class Trainer:
         if self.args.max_steps > 0:
             max_steps = self.args.max_steps
             end_epoch = self.args.max_steps // num_steps_per_epoch
-
         else:
             max_steps = self.args.epoch * num_steps_per_epoch
 
@@ -369,8 +368,8 @@ class Trainer:
             self.log("test_loss", test_loss)
 
     def compute_loss(self, sample) -> torch.Tensor:
-        """Computes loss for training.
-        If not overwritten, it takes prediction and ground truth and use `self.criterion` to compute loss
+        """
+        Computes loss for training. Subclass this method to customize your trainer.
         """
         X, y = sample
         if self.criterion is None:
@@ -428,7 +427,6 @@ class Trainer:
 
 
 class ClassificationTrainer(Trainer):
-
     @classmethod
     def accuracy(cls, y_hat: torch.Tensor, y: torch.Tensor, averaged: bool = True) -> float:
         _, prediction_index = y_hat.max(dim=1)

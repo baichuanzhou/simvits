@@ -1,10 +1,10 @@
 python cls_cifar10.py --num_classes 10 \
 --image_size 32 --patch_size 4 --in_channels 3 --ffn_dim 384 \
 --depth 6 --n_head 12 --dropout 0.1 \
---embed_dim 384 --pool "cls" --patch_proj "standard" \
+--embed_dim 384 --pool "cls" --patch_proj "conv" \
 --pos_embed "cos" \
 --fixed_patch_proj False \
---output_dir "output/1" \
+--output_dir "output/5" \
 --do_train True \
 --do_eval True \
 --do_predict True \
@@ -16,7 +16,7 @@ python cls_cifar10.py --num_classes 10 \
 --warmup_steps 1500 \
 --epoch 100 \
 --resume_from_checkpoint False \
---overwrite_output_dir False \
+--overwrite_output_dir True \
 
 python cls_cifar10.py --num_classes 10 \
 --image_size 32 --patch_size 4 --in_channels 3 --ffn_dim 384 \

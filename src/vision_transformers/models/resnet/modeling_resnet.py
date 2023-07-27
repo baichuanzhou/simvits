@@ -3,20 +3,7 @@ import torch.nn as nn
 from typing import List
 from dataclasses import dataclass
 from functools import partial
-
-
-@dataclass
-class ResNetConfig:
-    hidden_sizes: List[int]
-    depths: List[int]
-    num_channels: int = 3
-    embedding_size: int = 64
-    layer_type: str = "bottleneck"
-    downsample_in_first_stage: bool = True
-    embedding_kernel_size: int = 7
-    embedding_stride: int = 2
-    embedding_pooling_with_downsample: bool = True
-    reduction: int = 4
+from configuration_resnet import ResNetConfig
 
 
 class ResNetConvLayer(nn.Module):

@@ -1,7 +1,5 @@
 import torch
 import torch.nn as nn
-from typing import List
-from dataclasses import dataclass
 from functools import partial
 from configuration_resnet import ResNetConfig
 
@@ -171,7 +169,7 @@ class ResNetEncoder(nn.Module):
                             out_channels=out_channels, depth=depth,
                             stride=2 if config.downsample_in_first_stage else 1)
             )
-            if not config.downsample_in_first_stage:
+            if config.downsample_after_stage:
                 self.stages.append(
                     ResNetConvLayer(out_channels, out_channels, stride=2)
                 )

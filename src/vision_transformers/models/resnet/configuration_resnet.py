@@ -10,6 +10,7 @@ class ResNetConfig:
     embedding_size: int = 64
     layer_type: str = "bottleneck"
     downsample_in_first_stage: bool = True
+    downsample_after_stage: bool = False
     embedding_kernel_size: int = 7
     embedding_stride: int = 2
     embedding_pooling_with_downsample: bool = True

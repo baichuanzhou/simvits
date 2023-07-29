@@ -2,11 +2,13 @@ import torch
 import torch.nn as nn
 from functools import partial
 from configuration_resnet import ResNetConfig
+from typing import Optional
 
 
 class ResNetConvLayer(nn.Module):
     def __init__(
-            self, in_channels: int, out_channels: int, kernel_size: int = 3, stride: int = 1
+            self, in_channels: int, out_channels: int, kernel_size: int = 3, stride: int = 1,
+            activation: Optional[nn.Module] = nn.ReLU()
     ):
         super().__init__()
         self.convolution = nn.Conv2d(
@@ -14,12 +16,12 @@ class ResNetConvLayer(nn.Module):
             padding=kernel_size // 2, bias=False
         )
         self.normalization = nn.BatchNorm2d(out_channels)
-        self.activation = nn.ReLU()
+        self.activation = activation
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         hidden_state = self.convolution(x)
         hidden_state = self.normalization(hidden_state)
-        hidden_state = self.activation(hidden_state)
+        hidden_state = self.activation(hidden_state) if self.activation is not None else hidden_state
         return hidden_state
 
 
@@ -94,7 +96,7 @@ class ResNetBottleNetLayer(nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int, stride: int = 1, reduction: int = 4):
         super().__init__()
-        bottleneck_channels = in_channels // reduction
+        bottleneck_channels = out_channels // reduction
         should_apply_residual = in_channels != out_channels or stride != 1
         self.bottleneck_layer = nn.Sequential(
             ResNetConvLayer(in_channels=in_channels, out_channels=bottleneck_channels, stride=stride,
@@ -102,7 +104,7 @@ class ResNetBottleNetLayer(nn.Module):
             ResNetConvLayer(in_channels=bottleneck_channels, out_channels=bottleneck_channels,
                             kernel_size=3),
             ResNetConvLayer(in_channels=bottleneck_channels, out_channels=out_channels,
-                            kernel_size=1)
+                            kernel_size=1, activation=None)
         )
         self.residual_connection = ResNetResidual(
             in_channels=in_channels, out_channels=out_channels, stride=stride
@@ -158,7 +160,7 @@ class ResNetEncoder(nn.Module):
                 depth=config.depths[0]
             )
         )
-        if not config.downsample_in_first_stage:
+        if config.downsample_after_stage:
             self.stages.append(
                 ResNetConvLayer(config.hidden_sizes[0], config.hidden_sizes[0], stride=2)
             )

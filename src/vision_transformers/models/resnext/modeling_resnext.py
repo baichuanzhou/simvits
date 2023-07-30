@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from configuration_resnext import ResNextConfig
+from .configuration_resnext import ResNextConfig
 from typing import Optional
 
 
@@ -13,7 +13,7 @@ class ResNextConvLayer(nn.Module):
         super().__init__()
         self.convolution = nn.Conv2d(
             in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size,
-            stride=stride, padding=kernel_size // 2, groups=groups
+            stride=stride, padding=kernel_size // 2, groups=groups, bias=False
         )
         self.normalization = nn.BatchNorm2d(out_channels)
         self.activation = activation
@@ -44,8 +44,8 @@ class ResNextEmbeddings(nn.Module):
 class ResNextResidual(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, stride: int = 2):
         super().__init__()
-        self.convolution = ResNextConvLayer(
-            in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=stride
+        self.convolution = nn.Conv2d(
+            in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=stride, bias=False
         )
         self.normalization = nn.BatchNorm2d(out_channels)
 
@@ -87,7 +87,7 @@ class ResNextStage(nn.Module):
             bottleneck_width: int,
             depth: int = 3,
             stride: int = 2,
-            reduction: int = 2
+            reduction: int = 4
     ):
         super().__init__()
         self.layers = nn.Sequential(
@@ -157,6 +157,10 @@ class ResNextModel(nn.Module):
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
+
+        for m in self.modules():
+            if isinstance(m, ResNextBottleNeckLayer) and m.bottleneck_layer[2].normalization is not None:
+                nn.init.constant_(m.bottleneck_layer[2].normalization.weight, 0)
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         hidden_states = self.embedder(pixel_values)

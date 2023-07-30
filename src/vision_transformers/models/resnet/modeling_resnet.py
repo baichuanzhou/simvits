@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from functools import partial
-from configuration_resnet import ResNetConfig
+from .configuration_resnet import ResNetConfig
 from typing import Optional
 
 
@@ -73,7 +73,7 @@ class ResNetBasicLayer(nn.Module):
         should_apply_residual = in_channels != out_channels or stride != 1
         self.basic_layer = nn.Sequential(
             ResNetConvLayer(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=stride),
-            ResNetConvLayer(in_channels=out_channels, out_channels=out_channels, kernel_size=3)
+            ResNetConvLayer(in_channels=out_channels, out_channels=out_channels, kernel_size=3, activation=None)
         )
 
         self.residual_connection = ResNetResidual(
@@ -194,6 +194,13 @@ class ResNetModel(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
+        for m in self.modules():
+            if isinstance(m, ResNetBottleNetLayer) and m.bottleneck_layer[2].normalization is not None:
+                nn.init.constant_(m.bottleneck_layer[2].normalization.weight, 0)
+
+            elif isinstance(m, ResNetBasicLayer) and m.basic_layer[1].normalization is not None:
+                nn.init.constant_(m.basic_layer[1].normalization.weight, 0)
+
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         embedding = self.embedder(pixel_values)
         hidden_states = self.encoder(embedding)
@@ -202,10 +209,10 @@ class ResNetModel(nn.Module):
 
 
 class ResNetForImageClassification(nn.Module):
-    def __init__(self, config: ResNetConfig, num_classes: int = 1000):
+    def __init__(self, config: ResNetConfig):
         super().__init__()
         self.model = ResNetModel(config)
-        self.linear = nn.Linear(config.hidden_sizes[-1], num_classes)
+        self.linear = nn.Linear(config.hidden_sizes[-1], config.num_labels)
 
     def forward(self, pixel_values):
         hidden_state = self.model(pixel_values).flatten(1)

@@ -15,3 +15,4 @@ class ResNetConfig:
     embedding_stride: int = 2
     embedding_pooling_with_downsample: bool = True
     reduction: int = 4
+    num_labels: int = 1000

@@ -99,10 +99,10 @@ class ResNetBottleNetLayer(nn.Module):
         bottleneck_channels = out_channels // reduction
         should_apply_residual = in_channels != out_channels or stride != 1
         self.bottleneck_layer = nn.Sequential(
-            ResNetConvLayer(in_channels=in_channels, out_channels=bottleneck_channels, stride=stride,
+            ResNetConvLayer(in_channels=in_channels, out_channels=bottleneck_channels,
                             kernel_size=1),
             ResNetConvLayer(in_channels=bottleneck_channels, out_channels=bottleneck_channels,
-                            kernel_size=3),
+                            stride=stride, kernel_size=3),
             ResNetConvLayer(in_channels=bottleneck_channels, out_channels=out_channels,
                             kernel_size=1, activation=None)
         )
@@ -160,16 +160,13 @@ class ResNetEncoder(nn.Module):
                 depth=config.depths[0]
             )
         )
-        if config.downsample_after_stage:
-            self.stages.append(
-                ResNetConvLayer(config.hidden_sizes[0], config.hidden_sizes[0], stride=2)
-            )
+
         in_out_channels = zip(config.hidden_sizes, config.hidden_sizes[1:])
         for (in_channels, out_channels), depth in zip(in_out_channels, config.depths[1:]):
             self.stages.append(
                 ResNetStage(config=config, in_channels=in_channels,
                             out_channels=out_channels, depth=depth,
-                            stride=2 if config.downsample_in_first_stage else 1)
+                            stride=2 if not config.downsample_after_stage else 1)
             )
             if config.downsample_after_stage:
                 self.stages.append(

@@ -1,5 +1,5 @@
 from vision_transformers import (
-    VisionTransformer, Trainer, TrainingArguments, compute_metrics, HfArgumentParser
+    Trainer, TrainingArguments, compute_metrics, HfArgumentParser
 )
 from vision_transformers.data import RandomCropPaste, MixUp
 import torch

@@ -13,7 +13,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from configuration_vit import ViTConfig
+from .configuration_vit import ViTConfig
 from ..layers import QuickGLEU
 
 
